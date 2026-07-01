@@ -1,0 +1,952 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Canteiro — Gestão de Obras</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+:root{
+  --paper:#F2EFE7;
+  --paper-2:#EAE5D9;
+  --ink:#1E2124;
+  --ink-soft:#5B5A52;
+  --blue:#2C4A6E;
+  --blue-deep:#1C3350;
+  --blue-tint:#E4ECF2;
+  --amber:#D98A2B;
+  --amber-tint:#F7E8D2;
+  --green:#4C7A5B;
+  --green-tint:#E1EBE3;
+  --red:#B4483B;
+  --red-tint:#F3E0DC;
+  --line:#CFC7B4;
+  --line-strong:#B9AF97;
+  --radius:3px;
+  --shadow: 0 1px 0 rgba(30,33,36,0.05);
+}
+
+*{ box-sizing:border-box; }
+
+body{
+  margin:0;
+  background:
+    linear-gradient(var(--paper) 0%, var(--paper) 100%);
+  background-color: var(--paper);
+  background-image:
+    linear-gradient(rgba(44,74,110,0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(44,74,110,0.045) 1px, transparent 1px);
+  background-size: 28px 28px;
+  color: var(--ink);
+  font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
+  min-height: 100vh;
+}
+
+::selection{ background: var(--amber-tint); color: var(--ink); }
+
+.num{ font-family:'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
+
+button{ font-family: inherit; cursor:pointer; }
+input, select, textarea{ font-family: inherit; }
+a{ color: var(--blue); }
+
+:focus-visible{ outline: 2px solid var(--blue); outline-offset: 2px; }
+
+/* ---------- Shell ---------- */
+.shell{ display:flex; flex-direction:column; min-height:100vh; }
+
+.topbar{
+  display:flex; align-items:center; justify-content:space-between;
+  padding: 14px 24px;
+  border-bottom: 1.5px solid var(--ink);
+  background: var(--paper);
+  position: sticky; top:0; z-index: 20;
+}
+.brand{ display:flex; align-items:baseline; gap:10px; }
+.brand .mark{
+  font-family:'Archivo Black', sans-serif;
+  font-size: 22px; letter-spacing: 0.5px;
+  color: var(--ink);
+}
+.brand .tag{
+  font-size: 11px; text-transform: uppercase; letter-spacing: 1.6px;
+  color: var(--ink-soft); border-left: 2px solid var(--line-strong);
+  padding-left: 10px;
+}
+.topbar .meta{
+  font-size: 11px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 1px;
+  font-family:'JetBrains Mono', monospace;
+}
+
+.body{ display:flex; flex:1; min-height:0; }
+
+/* ---------- Sidebar ---------- */
+.sidebar{
+  width: 300px; flex-shrink:0;
+  border-right: 1.5px solid var(--ink);
+  padding: 18px 16px 40px;
+  overflow-y:auto;
+}
+.sidebar h2{
+  font-size: 11px; text-transform:uppercase; letter-spacing:1.6px;
+  color: var(--ink-soft); margin: 4px 0 12px;
+}
+.new-obra-btn{
+  width:100%; padding:10px 12px; margin-bottom:16px;
+  background: var(--ink); color: var(--paper);
+  border:none; border-radius: var(--radius);
+  font-weight:600; font-size:13px; letter-spacing:0.3px;
+  display:flex; align-items:center; justify-content:center; gap:8px;
+  transition: background .15s;
+}
+.new-obra-btn:hover{ background: var(--blue-deep); }
+
+.dash-link{
+  display:block; width:100%; text-align:left; padding:10px 12px; margin-bottom:14px;
+  background: transparent; border: 1px dashed var(--line-strong); border-radius: var(--radius);
+  font-size:13px; font-weight:600; color: var(--ink-soft);
+}
+.dash-link.active{ border-color: var(--blue); color: var(--blue); background: var(--blue-tint); }
+
+.obra-card{
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 10px 12px; margin-bottom: 10px; cursor:pointer;
+  background: rgba(255,255,255,0.35);
+  transition: border-color .15s, transform .1s;
+}
+.obra-card:hover{ border-color: var(--ink); }
+.obra-card.active{ border-color: var(--blue); background: var(--blue-tint); }
+.obra-card .name{ font-weight:700; font-size:14px; margin-bottom:3px; }
+.obra-card .addr{ font-size:11.5px; color: var(--ink-soft); margin-bottom:8px; }
+
+.empty-side{ font-size:12.5px; color: var(--ink-soft); line-height:1.5; padding: 4px 2px; }
+
+/* Stamp badges */
+.stamp{
+  display:inline-block; font-family:'JetBrains Mono', monospace; font-weight:700;
+  font-size: 10px; letter-spacing: 1px; text-transform:uppercase;
+  padding: 3px 8px; border: 1.5px dashed currentColor; border-radius: 2px;
+  transform: rotate(-1.5deg);
+}
+.stamp.prospeccao{ color: var(--ink-soft); }
+.stamp.reforma{ color: var(--amber); }
+.stamp.venda{ color: var(--blue); }
+.stamp.vendido{ color: var(--green); }
+
+/* ---------- Main ---------- */
+.main{ flex:1; min-width:0; overflow-y:auto; padding: 28px 32px 80px; }
+
+.section-title{
+  font-family:'Archivo Black', sans-serif; font-size: 26px; margin: 0 0 4px;
+}
+.section-sub{ color: var(--ink-soft); font-size: 13px; margin: 0 0 24px; }
+
+/* Dashboard cards */
+.cards-row{ display:grid; grid-template-columns: repeat(4, 1fr); gap:14px; margin-bottom: 30px; }
+.card{
+  background: rgba(255,255,255,0.5); border:1px solid var(--line); border-radius: var(--radius);
+  padding: 16px; position:relative;
+}
+.card::before{
+  content:''; position:absolute; top:0; left:0; width: 3px; height:100%;
+  background: var(--blue); border-radius: var(--radius) 0 0 var(--radius);
+}
+.card.amber::before{ background: var(--amber); }
+.card.green::before{ background: var(--green); }
+.card.red::before{ background: var(--red); }
+.card .label{ font-size:11px; text-transform:uppercase; letter-spacing:1px; color: var(--ink-soft); margin-bottom:8px; }
+.card .value{ font-family:'JetBrains Mono', monospace; font-size: 22px; font-weight:700; }
+
+.obras-table-wrap{ border:1px solid var(--line); border-radius: var(--radius); overflow:hidden; }
+table{ width:100%; border-collapse: collapse; font-size: 13px; }
+th{
+  text-align:left; padding: 10px 14px; background: var(--paper-2);
+  font-size:10.5px; text-transform:uppercase; letter-spacing:0.8px; color: var(--ink-soft);
+  border-bottom: 1px solid var(--line);
+}
+td{ padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+tr:last-child td{ border-bottom:none; }
+tbody tr{ cursor:pointer; }
+tbody tr:hover{ background: rgba(44,74,110,0.05); }
+
+/* Obra detail header */
+.obra-head{
+  display:flex; justify-content:space-between; align-items:flex-start; margin-bottom: 18px;
+  gap: 16px; flex-wrap:wrap;
+}
+.obra-head .titles{ flex:1; min-width:220px; }
+.obra-head h1{ font-family:'Archivo Black', sans-serif; font-size: 26px; margin:0 0 4px; }
+.obra-head .addr{ color: var(--ink-soft); font-size: 13.5px; }
+.head-actions{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+
+.status-select{
+  padding: 7px 10px; border: 1.5px solid var(--ink); border-radius: var(--radius);
+  background: var(--paper); font-weight:700; font-size:12px; text-transform:uppercase; letter-spacing:0.5px;
+}
+.btn{
+  padding: 8px 14px; border-radius: var(--radius); font-size:12.5px; font-weight:600;
+  border: 1.5px solid var(--ink); background: var(--paper); color: var(--ink);
+}
+.btn:hover{ background: var(--ink); color: var(--paper); }
+.btn.primary{ background: var(--ink); color: var(--paper); }
+.btn.primary:hover{ background: var(--blue-deep); border-color: var(--blue-deep); }
+.btn.danger{ border-color: var(--red); color: var(--red); }
+.btn.danger:hover{ background: var(--red); color: #fff; }
+.btn.ghost{ border-style: dashed; }
+.btn.small{ padding: 5px 10px; font-size:11.5px; }
+
+/* Tabs */
+.tabs{ display:flex; gap: 2px; border-bottom: 1.5px solid var(--ink); margin-bottom: 22px; flex-wrap:wrap; }
+.tab-btn{
+  padding: 9px 16px; background: transparent; border:none; font-weight:600; font-size:13px;
+  color: var(--ink-soft); border-bottom: 3px solid transparent; margin-bottom:-1.5px;
+}
+.tab-btn.active{ color: var(--ink); border-bottom-color: var(--amber); }
+
+/* Forms */
+.field-grid{ display:grid; grid-template-columns: repeat(auto-fit, minmax(170px,1fr)); gap: 12px; margin-bottom: 14px; }
+.field{ display:flex; flex-direction:column; gap:5px; }
+.field label{ font-size: 11px; text-transform:uppercase; letter-spacing:0.6px; color: var(--ink-soft); font-weight:600; }
+.field input, .field select, .field textarea{
+  padding: 9px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius);
+  background: rgba(255,255,255,0.6); font-size: 13.5px; color: var(--ink);
+}
+.field input:focus, .field select:focus, .field textarea:focus{ border-color: var(--blue); background:#fff; }
+.field.wide{ grid-column: 1 / -1; }
+
+.panel{
+  background: rgba(255,255,255,0.4); border:1px solid var(--line); border-radius: var(--radius);
+  padding: 18px; margin-bottom: 20px;
+}
+.panel h3{ margin:0 0 14px; font-size:14px; text-transform:uppercase; letter-spacing:0.8px; color: var(--ink-soft); }
+
+.list-row{
+  display:flex; justify-content:space-between; align-items:center; gap:10px;
+  padding: 10px 4px; border-bottom: 1px solid var(--line);
+}
+.list-row:last-child{ border-bottom:none; }
+.list-row .main-txt{ font-weight:600; font-size:13.5px; }
+.list-row .sub-txt{ font-size:11.5px; color: var(--ink-soft); }
+.list-row .amount{ font-family:'JetBrains Mono', monospace; font-weight:700; font-size: 13.5px; }
+.row-actions{ display:flex; gap:6px; }
+.icon-btn{
+  border:1px solid var(--line-strong); background:transparent; border-radius: var(--radius);
+  width:26px; height:26px; display:flex; align-items:center; justify-content:center; font-size:13px; color: var(--ink-soft);
+}
+.icon-btn:hover{ border-color: var(--red); color: var(--red); }
+
+.pill{
+  display:inline-block; padding: 2px 8px; border-radius: 20px; font-size: 10.5px; font-weight:700;
+  text-transform:uppercase; letter-spacing:0.4px;
+}
+.pill.pendente{ background: var(--paper-2); color: var(--ink-soft); }
+.pill.andamento{ background: var(--amber-tint); color: var(--amber); }
+.pill.concluido{ background: var(--green-tint); color: var(--green); }
+
+/* Timeline */
+.timeline{ position:relative; padding-left: 6px; }
+.tl-item{ position:relative; padding: 0 0 22px 26px; border-left: 2px solid var(--line-strong); }
+.tl-item:last-child{ border-left-color: transparent; padding-bottom:0; }
+.tl-item::before{
+  content:''; position:absolute; left:-7px; top:2px; width:12px; height:12px; border-radius:50%;
+  background: var(--paper); border: 2.5px solid var(--line-strong);
+}
+.tl-item.concluido::before{ border-color: var(--green); background: var(--green); }
+.tl-item.andamento::before{ border-color: var(--amber); background: var(--amber-tint); }
+.tl-header{ display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
+.tl-title{ font-weight:700; font-size:13.5px; }
+.tl-dates{ font-size:11px; color: var(--ink-soft); font-family:'JetBrains Mono', monospace; }
+
+/* Empty states */
+.empty{
+  text-align:center; padding: 50px 20px; color: var(--ink-soft); font-size: 13.5px;
+  border: 1.5px dashed var(--line-strong); border-radius: var(--radius);
+}
+.empty .big{ font-family:'Archivo Black', sans-serif; font-size:18px; color: var(--ink); margin-bottom:6px; }
+
+/* Modal */
+.overlay{
+  position:fixed; inset:0; background: rgba(30,33,36,0.45); z-index: 50;
+  display:flex; align-items:center; justify-content:center; padding: 20px;
+}
+.modal{
+  background: var(--paper); border: 1.5px solid var(--ink); border-radius: var(--radius);
+  width: 100%; max-width: 460px; padding: 22px; max-height: 88vh; overflow-y:auto;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+}
+.modal h3{ font-family:'Archivo Black', sans-serif; font-size:17px; margin:0 0 16px; }
+.modal-actions{ display:flex; justify-content:flex-end; gap:8px; margin-top: 8px; }
+
+.toast{
+  position: fixed; bottom: 20px; right:20px; z-index: 60;
+  background: var(--ink); color: var(--paper); padding: 11px 16px; border-radius: var(--radius);
+  font-size: 13px; font-weight:600; box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+  animation: slideup .2s ease;
+}
+@keyframes slideup{ from{ transform: translateY(10px); opacity:0; } to{ transform:none; opacity:1; } }
+
+.share-note{
+  font-size: 11.5px; color: var(--ink-soft); background: var(--amber-tint); border: 1px solid var(--amber);
+  border-radius: var(--radius); padding: 8px 12px; margin-bottom: 18px; line-height:1.5;
+}
+
+.loading-screen{ display:flex; align-items:center; justify-content:center; height: 60vh; color: var(--ink-soft); font-size:13px; }
+
+@media (max-width: 860px){
+  .body{ flex-direction:column; }
+  .sidebar{ width:100%; border-right:none; border-bottom: 1.5px solid var(--ink); max-height: 260px; }
+  .cards-row{ grid-template-columns: repeat(2,1fr); }
+  .main{ padding: 20px 16px 60px; }
+}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="topbar">
+    <div class="brand">
+      <span class="mark">CANTEIRO</span>
+      <span class="tag">Gestão de Obras &amp; Sócios</span>
+    </div>
+    <div class="meta" id="topbarMeta">carregando…</div>
+  </div>
+  <div class="body">
+    <div class="sidebar">
+      <button class="dash-link active" id="dashLinkBtn" onclick="goDashboard()">▦ Visão Geral</button>
+      <button class="new-obra-btn" onclick="openObraModal()">+ Nova Obra</button>
+      <h2>Obras</h2>
+      <div id="obraList"><div class="empty-side">Carregando…</div></div>
+    </div>
+    <div class="main" id="main">
+      <div class="loading-screen">Carregando dados do Canteiro…</div>
+    </div>
+  </div>
+</div>
+
+<div id="modalRoot"></div>
+<div id="toastRoot"></div>
+
+<script>
+/* =========================================================
+   CANTEIRO — Gestão de Obras (dados compartilhados via storage)
+   ========================================================= */
+
+const STATUS_LABELS = {
+  prospeccao: 'Prospecção',
+  reforma: 'Em Reforma',
+  venda: 'À Venda',
+  vendido: 'Vendido'
+};
+const STATUS_CLASS = { prospeccao:'prospeccao', reforma:'reforma', venda:'venda', vendido:'vendido' };
+const ETAPA_STATUS = { pendente:'Pendente', andamento:'Em Andamento', concluido:'Concluído' };
+
+let state = {
+  obrasIndex: [],   // [{id, nome, status}]
+  currentObra: null, // full obra object currently loaded
+  currentView: 'dashboard', // 'dashboard' | 'obra'
+  currentTab: 'geral',
+  loaded: false
+};
+
+function uid(prefix){
+  return prefix + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,7);
+}
+function fmtMoney(v){
+  const n = Number(v)||0;
+  return n.toLocaleString('pt-BR', { style:'currency', currency:'BRL' });
+}
+function fmtDate(d){
+  if(!d) return '—';
+  const parts = d.split('-');
+  if(parts.length===3) return parts[2]+'/'+parts[1]+'/'+parts[0];
+  return d;
+}
+function showToast(msg){
+  const root = document.getElementById('toastRoot');
+  const el = document.createElement('div');
+  el.className='toast';
+  el.textContent = msg;
+  root.innerHTML='';
+  root.appendChild(el);
+  setTimeout(()=>{ if(el.parentNode) el.parentNode.removeChild(el); }, 2600);
+}
+
+/* ---------------- Storage helpers ---------------- */
+async function storageGet(key, shared){
+  try{
+    const res = await window.storage.get(key, shared);
+    return res ? res.value : null;
+  }catch(e){
+    return null;
+  }
+}
+async function storageSet(key, value, shared){
+  try{
+    const res = await window.storage.set(key, value, shared);
+    return !!res;
+  }catch(e){
+    console.error('storage set failed', e);
+    showToast('Erro ao salvar. Tente novamente.');
+    return false;
+  }
+}
+async function storageDelete(key, shared){
+  try{ await window.storage.delete(key, shared); }catch(e){ /* ignore */ }
+}
+
+async function loadObrasIndex(){
+  const raw = await storageGet('obras-index', true);
+  state.obrasIndex = raw ? JSON.parse(raw) : [];
+}
+async function saveObrasIndex(){
+  await storageSet('obras-index', JSON.stringify(state.obrasIndex), true);
+}
+async function loadObra(id){
+  const raw = await storageGet('obra:'+id, true);
+  return raw ? JSON.parse(raw) : null;
+}
+async function saveObra(obra){
+  await storageSet('obra:'+obra.id, JSON.stringify(obra), true);
+}
+
+/* ---------------- Computations ---------------- */
+function totalDespesas(obra){
+  return (obra.despesas||[]).reduce((s,d)=> s + (Number(d.valor)||0), 0);
+}
+function valorVendaEfetivo(obra){
+  if(obra.valorVendaReal) return Number(obra.valorVendaReal)||0;
+  return Number(obra.valorVendaEstimado)||0;
+}
+function lucroObra(obra){
+  return valorVendaEfetivo(obra) - (Number(obra.valorCompra)||0) - totalDespesas(obra);
+}
+
+/* ---------------- Init ---------------- */
+async function init(){
+  await loadObrasIndex();
+  state.loaded = true;
+  document.getElementById('topbarMeta').textContent = state.obrasIndex.length + ' obra(s) · dados compartilhados entre sócios';
+  renderSidebar();
+  goDashboard();
+}
+
+/* ---------------- Sidebar ---------------- */
+function renderSidebar(){
+  const wrap = document.getElementById('obraList');
+  if(!state.obrasIndex.length){
+    wrap.innerHTML = '<div class="empty-side">Nenhuma obra cadastrada ainda. Clique em "+ Nova Obra" para começar.</div>';
+    return;
+  }
+  wrap.innerHTML = state.obrasIndex.map(o => `
+    <div class="obra-card ${state.currentObra && state.currentObra.id===o.id ? 'active':''}" onclick="openObra('${o.id}')">
+      <div class="name">${escapeHtml(o.nome)}</div>
+      <div class="addr">${escapeHtml(o.endereco||'')}</div>
+      <span class="stamp ${STATUS_CLASS[o.status]||'prospeccao'}">${STATUS_LABELS[o.status]||'Prospecção'}</span>
+    </div>
+  `).join('');
+}
+
+function escapeHtml(str){
+  if(str===undefined || str===null) return '';
+  return String(str).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+/* ---------------- Dashboard ---------------- */
+async function goDashboard(){
+  state.currentView='dashboard';
+  state.currentObra=null;
+  document.getElementById('dashLinkBtn').classList.add('active');
+  renderSidebar();
+  const main = document.getElementById('main');
+  main.innerHTML = '<div class="loading-screen">Calculando totais…</div>';
+
+  const obras = [];
+  for(const o of state.obrasIndex){
+    const full = await loadObra(o.id);
+    if(full) obras.push(full);
+  }
+
+  const totalInvestido = obras.reduce((s,o)=> s + (Number(o.valorCompra)||0) + totalDespesas(o), 0);
+  const totalGastoReforma = obras.reduce((s,o)=> s + totalDespesas(o), 0);
+  const lucroTotal = obras.reduce((s,o)=> s + lucroObra(o), 0);
+  const ativas = obras.filter(o=> o.status==='reforma' || o.status==='venda').length;
+
+  main.innerHTML = `
+    <h1 class="section-title">Visão Geral</h1>
+    <p class="section-sub">Panorama consolidado de todas as obras em andamento e concluídas.</p>
+
+    <div class="cards-row">
+      <div class="card">
+        <div class="label">Capital Investido</div>
+        <div class="value num">${fmtMoney(totalInvestido)}</div>
+      </div>
+      <div class="card amber">
+        <div class="label">Gasto em Reformas</div>
+        <div class="value num">${fmtMoney(totalGastoReforma)}</div>
+      </div>
+      <div class="card ${lucroTotal>=0?'green':'red'}">
+        <div class="label">Lucro (Projetado/Realizado)</div>
+        <div class="value num">${fmtMoney(lucroTotal)}</div>
+      </div>
+      <div class="card">
+        <div class="label">Obras Ativas</div>
+        <div class="value num">${ativas} / ${obras.length}</div>
+      </div>
+    </div>
+
+    ${obras.length ? `
+    <div class="obras-table-wrap">
+      <table>
+        <thead><tr>
+          <th>Obra</th><th>Status</th><th>Compra</th><th>Gasto Reforma</th><th>Venda (est./real)</th><th>Lucro</th>
+        </tr></thead>
+        <tbody>
+          ${obras.map(o=>`
+            <tr onclick="openObra('${o.id}')">
+              <td><strong>${escapeHtml(o.nome)}</strong><br><span style="color:var(--ink-soft);font-size:11.5px;">${escapeHtml(o.endereco||'')}</span></td>
+              <td><span class="stamp ${STATUS_CLASS[o.status]}">${STATUS_LABELS[o.status]}</span></td>
+              <td class="num">${fmtMoney(o.valorCompra)}</td>
+              <td class="num">${fmtMoney(totalDespesas(o))}</td>
+              <td class="num">${fmtMoney(valorVendaEfetivo(o))}${o.valorVendaReal? '' : ' (est.)'}</td>
+              <td class="num" style="font-weight:700; color:${lucroObra(o)>=0?'var(--green)':'var(--red)'}">${fmtMoney(lucroObra(o))}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+    ` : `
+    <div class="empty">
+      <div class="big">Nenhuma obra cadastrada</div>
+      Clique em "+ Nova Obra" na barra lateral para registrar o primeiro imóvel.
+    </div>
+    `}
+  `;
+}
+
+/* ---------------- Obra detail ---------------- */
+async function openObra(id){
+  const obra = await loadObra(id);
+  if(!obra){ showToast('Obra não encontrada.'); return; }
+  state.currentObra = obra;
+  state.currentView='obra';
+  state.currentTab='geral';
+  document.getElementById('dashLinkBtn').classList.remove('active');
+  renderSidebar();
+  renderObra();
+}
+
+function renderObra(){
+  const o = state.currentObra;
+  const main = document.getElementById('main');
+  main.innerHTML = `
+    <div class="obra-head">
+      <div class="titles">
+        <h1>${escapeHtml(o.nome)}</h1>
+        <div class="addr">${escapeHtml(o.endereco||'Endereço não informado')}</div>
+      </div>
+      <div class="head-actions">
+        <select class="status-select" onchange="changeStatus(this.value)">
+          ${Object.keys(STATUS_LABELS).map(k=>`<option value="${k}" ${o.status===k?'selected':''}>${STATUS_LABELS[k]}</option>`).join('')}
+        </select>
+        <button class="btn" onclick="openObraModal(true)">Editar Nome/Endereço</button>
+        <button class="btn danger" onclick="confirmDeleteObra()">Excluir Obra</button>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn ${state.currentTab==='geral'?'active':''}" onclick="setTab('geral')">Visão Geral</button>
+      <button class="tab-btn ${state.currentTab==='orcamento'?'active':''}" onclick="setTab('orcamento')">Orçamento</button>
+      <button class="tab-btn ${state.currentTab==='cronograma'?'active':''}" onclick="setTab('cronograma')">Cronograma</button>
+      <button class="tab-btn ${state.currentTab==='socios'?'active':''}" onclick="setTab('socios')">Sócios &amp; Lucro</button>
+      <button class="tab-btn ${state.currentTab==='documentos'?'active':''}" onclick="setTab('documentos')">Documentos</button>
+    </div>
+
+    <div id="tabContent"></div>
+  `;
+  renderTab();
+}
+
+function setTab(t){ state.currentTab = t; renderObra(); }
+
+function renderTab(){
+  const o = state.currentObra;
+  const wrap = document.getElementById('tabContent');
+  if(state.currentTab==='geral') return renderTabGeral(wrap, o);
+  if(state.currentTab==='orcamento') return renderTabOrcamento(wrap, o);
+  if(state.currentTab==='cronograma') return renderTabCronograma(wrap, o);
+  if(state.currentTab==='socios') return renderTabSocios(wrap, o);
+  if(state.currentTab==='documentos') return renderTabDocumentos(wrap, o);
+}
+
+/* ---- Tab: Visão Geral ---- */
+function renderTabGeral(wrap, o){
+  const lucro = lucroObra(o);
+  wrap.innerHTML = `
+    <div class="cards-row" style="grid-template-columns: repeat(3,1fr);">
+      <div class="card"><div class="label">Valor de Compra</div><div class="value num">${fmtMoney(o.valorCompra)}</div></div>
+      <div class="card amber"><div class="label">Gasto em Reforma</div><div class="value num">${fmtMoney(totalDespesas(o))}</div></div>
+      <div class="card ${lucro>=0?'green':'red'}"><div class="label">Lucro ${o.valorVendaReal?'Realizado':'Projetado'}</div><div class="value num">${fmtMoney(lucro)}</div></div>
+    </div>
+    <div class="panel">
+      <h3>Dados do Imóvel</h3>
+      <form id="geralForm" onsubmit="return false;">
+        <div class="field-grid">
+          <div class="field"><label>Data da Compra</label><input type="date" id="f_dataCompra" value="${o.dataCompra||''}"></div>
+          <div class="field"><label>Valor de Compra (R$)</label><input type="number" step="0.01" id="f_valorCompra" value="${o.valorCompra||''}"></div>
+          <div class="field"><label>Valor de Venda Estimado (R$)</label><input type="number" step="0.01" id="f_valorVendaEstimado" value="${o.valorVendaEstimado||''}"></div>
+          <div class="field"><label>Valor de Venda Real (R$)</label><input type="number" step="0.01" id="f_valorVendaReal" value="${o.valorVendaReal||''}"></div>
+          <div class="field"><label>Data da Venda</label><input type="date" id="f_dataVenda" value="${o.dataVenda||''}"></div>
+        </div>
+        <div class="field wide">
+          <label>Notas Gerais</label>
+          <textarea id="f_notas" rows="3">${escapeHtml(o.notas||'')}</textarea>
+        </div>
+        <button class="btn primary" onclick="saveGeral()">Salvar Dados</button>
+      </form>
+    </div>
+  `;
+}
+async function saveGeral(){
+  const o = state.currentObra;
+  o.dataCompra = document.getElementById('f_dataCompra').value;
+  o.valorCompra = document.getElementById('f_valorCompra').value;
+  o.valorVendaEstimado = document.getElementById('f_valorVendaEstimado').value;
+  o.valorVendaReal = document.getElementById('f_valorVendaReal').value;
+  o.dataVenda = document.getElementById('f_dataVenda').value;
+  o.notas = document.getElementById('f_notas').value;
+  await saveObra(o);
+  showToast('Dados salvos.');
+  renderTabGeral(document.getElementById('tabContent'), o);
+}
+
+/* ---- Tab: Orçamento ---- */
+function renderTabOrcamento(wrap, o){
+  const despesas = o.despesas || [];
+  const total = totalDespesas(o);
+  wrap.innerHTML = `
+    <div class="panel">
+      <h3>Nova Despesa</h3>
+      <div class="field-grid">
+        <div class="field"><label>Categoria</label>
+          <select id="d_categoria">
+            <option>Material</option><option>Mão de obra</option><option>Projeto/Licença</option>
+            <option>Documentação/Cartório</option><option>Impostos</option><option>Outros</option>
+          </select>
+        </div>
+        <div class="field"><label>Descrição</label><input type="text" id="d_descricao" placeholder="Ex: Tinta e pintura"></div>
+        <div class="field"><label>Valor (R$)</label><input type="number" step="0.01" id="d_valor"></div>
+        <div class="field"><label>Data</label><input type="date" id="d_data"></div>
+      </div>
+      <button class="btn primary" onclick="addDespesa()">Adicionar Despesa</button>
+    </div>
+    <div class="panel">
+      <h3>Despesas Lançadas — Total: <span class="num" style="color:var(--ink)">${fmtMoney(total)}</span></h3>
+      ${despesas.length ? despesas.slice().sort((a,b)=>(b.data||'').localeCompare(a.data||'')).map(d=>`
+        <div class="list-row">
+          <div>
+            <div class="main-txt">${escapeHtml(d.descricao||d.categoria)}</div>
+            <div class="sub-txt">${escapeHtml(d.categoria)} · ${fmtDate(d.data)}</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <div class="amount">${fmtMoney(d.valor)}</div>
+            <div class="row-actions"><button class="icon-btn" onclick="removeDespesa('${d.id}')">✕</button></div>
+          </div>
+        </div>
+      `).join('') : '<div class="empty-side">Nenhuma despesa lançada ainda.</div>'}
+    </div>
+  `;
+}
+async function addDespesa(){
+  const descricao = document.getElementById('d_descricao').value.trim();
+  const valor = document.getElementById('d_valor').value;
+  if(!valor || Number(valor)<=0){ showToast('Informe um valor válido.'); return; }
+  const o = state.currentObra;
+  o.despesas = o.despesas || [];
+  o.despesas.push({
+    id: uid('desp'),
+    categoria: document.getElementById('d_categoria').value,
+    descricao,
+    valor: Number(valor),
+    data: document.getElementById('d_data').value
+  });
+  await saveObra(o);
+  showToast('Despesa adicionada.');
+  renderTabOrcamento(document.getElementById('tabContent'), o);
+}
+async function removeDespesa(id){
+  const o = state.currentObra;
+  o.despesas = (o.despesas||[]).filter(d=>d.id!==id);
+  await saveObra(o);
+  renderTabOrcamento(document.getElementById('tabContent'), o);
+}
+
+/* ---- Tab: Cronograma ---- */
+function renderTabCronograma(wrap, o){
+  const etapas = o.etapas || [];
+  wrap.innerHTML = `
+    <div class="panel">
+      <h3>Nova Etapa</h3>
+      <div class="field-grid">
+        <div class="field wide"><label>Nome da Etapa</label><input type="text" id="e_nome" placeholder="Ex: Demolição / Elétrica / Pintura final"></div>
+        <div class="field"><label>Início Previsto</label><input type="date" id="e_inicio"></div>
+        <div class="field"><label>Fim Previsto</label><input type="date" id="e_fim"></div>
+        <div class="field"><label>Status</label>
+          <select id="e_status">
+            <option value="pendente">Pendente</option><option value="andamento">Em Andamento</option><option value="concluido">Concluído</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn primary" onclick="addEtapa()">Adicionar Etapa</button>
+    </div>
+    <div class="panel">
+      <h3>Cronograma</h3>
+      ${etapas.length ? `<div class="timeline">
+        ${etapas.map(e=>`
+          <div class="tl-item ${e.status}">
+            <div class="tl-header">
+              <span class="tl-title">${escapeHtml(e.nome)}</span>
+              <span class="pill ${e.status}">${ETAPA_STATUS[e.status]}</span>
+            </div>
+            <div class="tl-dates">${fmtDate(e.inicio)} → ${fmtDate(e.fim)}</div>
+            <div class="row-actions" style="margin-top:6px;">
+              <button class="btn small" onclick="cycleEtapaStatus('${e.id}')">Avançar status</button>
+              <button class="icon-btn" onclick="removeEtapa('${e.id}')">✕</button>
+            </div>
+          </div>
+        `).join('')}
+      </div>` : '<div class="empty-side">Nenhuma etapa cadastrada ainda.</div>'}
+    </div>
+  `;
+}
+async function addEtapa(){
+  const nome = document.getElementById('e_nome').value.trim();
+  if(!nome){ showToast('Dê um nome para a etapa.'); return; }
+  const o = state.currentObra;
+  o.etapas = o.etapas || [];
+  o.etapas.push({
+    id: uid('etapa'), nome,
+    inicio: document.getElementById('e_inicio').value,
+    fim: document.getElementById('e_fim').value,
+    status: document.getElementById('e_status').value
+  });
+  await saveObra(o);
+  showToast('Etapa adicionada.');
+  renderTabCronograma(document.getElementById('tabContent'), o);
+}
+async function cycleEtapaStatus(id){
+  const order = ['pendente','andamento','concluido'];
+  const o = state.currentObra;
+  const et = (o.etapas||[]).find(e=>e.id===id);
+  if(!et) return;
+  et.status = order[(order.indexOf(et.status)+1) % order.length];
+  await saveObra(o);
+  renderTabCronograma(document.getElementById('tabContent'), o);
+}
+async function removeEtapa(id){
+  const o = state.currentObra;
+  o.etapas = (o.etapas||[]).filter(e=>e.id!==id);
+  await saveObra(o);
+  renderTabCronograma(document.getElementById('tabContent'), o);
+}
+
+/* ---- Tab: Sócios ---- */
+function renderTabSocios(wrap, o){
+  const socios = o.socios || [];
+  const totalPct = socios.reduce((s,x)=> s + (Number(x.percentual)||0), 0);
+  const lucro = lucroObra(o);
+  wrap.innerHTML = `
+    <div class="panel">
+      <h3>Novo Sócio nesta Obra</h3>
+      <div class="field-grid">
+        <div class="field"><label>Nome</label><input type="text" id="s_nome"></div>
+        <div class="field"><label>Participação (%)</label><input type="number" step="0.1" id="s_percentual"></div>
+        <div class="field"><label>Aporte de Capital (R$)</label><input type="number" step="0.01" id="s_aporte"></div>
+      </div>
+      <button class="btn primary" onclick="addSocio()">Adicionar Sócio</button>
+    </div>
+    <div class="panel">
+      <h3>Divisão de Lucro — ${totalPct>100 ? '<span style="color:var(--red)">⚠ soma ultrapassa 100%</span>' : `Total alocado: ${totalPct.toFixed(1)}%`}</h3>
+      ${socios.length ? socios.map(s=>`
+        <div class="list-row">
+          <div>
+            <div class="main-txt">${escapeHtml(s.nome)} <span class="sub-txt">— ${Number(s.percentual)||0}%</span></div>
+            <div class="sub-txt">Aporte: ${fmtMoney(s.aporte)}</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <div class="amount" style="color:${lucro>=0?'var(--green)':'var(--red)'}">${fmtMoney(lucro * (Number(s.percentual)||0)/100)}</div>
+            <div class="row-actions"><button class="icon-btn" onclick="removeSocio('${s.id}')">✕</button></div>
+          </div>
+        </div>
+      `).join('') : '<div class="empty-side">Nenhum sócio cadastrado para esta obra ainda.</div>'}
+    </div>
+  `;
+}
+async function addSocio(){
+  const nome = document.getElementById('s_nome').value.trim();
+  if(!nome){ showToast('Informe o nome do sócio.'); return; }
+  const o = state.currentObra;
+  o.socios = o.socios || [];
+  o.socios.push({
+    id: uid('socio'), nome,
+    percentual: document.getElementById('s_percentual').value || 0,
+    aporte: document.getElementById('s_aporte').value || 0
+  });
+  await saveObra(o);
+  showToast('Sócio adicionado.');
+  renderTabSocios(document.getElementById('tabContent'), o);
+}
+async function removeSocio(id){
+  const o = state.currentObra;
+  o.socios = (o.socios||[]).filter(s=>s.id!==id);
+  await saveObra(o);
+  renderTabSocios(document.getElementById('tabContent'), o);
+}
+
+/* ---- Tab: Documentos ---- */
+function renderTabDocumentos(wrap, o){
+  const docs = o.documentos || [];
+  wrap.innerHTML = `
+    <div class="share-note">
+      Este espaço guarda <strong>links e anotações</strong> de documentos (contratos, matrícula, fotos no Drive, etc.) — não é possível anexar arquivos diretamente aqui. Cole o link de onde o arquivo está hospedado (Google Drive, Dropbox etc.).
+    </div>
+    <div class="panel">
+      <h3>Novo Documento / Link</h3>
+      <div class="field-grid">
+        <div class="field"><label>Título</label><input type="text" id="doc_titulo" placeholder="Ex: Escritura, Fotos Antes/Depois"></div>
+        <div class="field wide"><label>Link (opcional)</label><input type="text" id="doc_link" placeholder="https://..."></div>
+        <div class="field wide"><label>Anotação</label><textarea id="doc_nota" rows="2"></textarea></div>
+      </div>
+      <button class="btn primary" onclick="addDocumento()">Adicionar</button>
+    </div>
+    <div class="panel">
+      <h3>Documentos</h3>
+      ${docs.length ? docs.map(d=>`
+        <div class="list-row">
+          <div>
+            <div class="main-txt">${escapeHtml(d.titulo)}</div>
+            <div class="sub-txt">${d.link ? `<a href="${escapeHtml(d.link)}" target="_blank" rel="noopener">${escapeHtml(d.link)}</a>` : ''} ${d.nota ? '· '+escapeHtml(d.nota) : ''}</div>
+          </div>
+          <div class="row-actions"><button class="icon-btn" onclick="removeDocumento('${d.id}')">✕</button></div>
+        </div>
+      `).join('') : '<div class="empty-side">Nenhum documento registrado ainda.</div>'}
+    </div>
+  `;
+}
+async function addDocumento(){
+  const titulo = document.getElementById('doc_titulo').value.trim();
+  if(!titulo){ showToast('Dê um título ao documento.'); return; }
+  const o = state.currentObra;
+  o.documentos = o.documentos || [];
+  o.documentos.push({
+    id: uid('doc'), titulo,
+    link: document.getElementById('doc_link').value.trim(),
+    nota: document.getElementById('doc_nota').value.trim()
+  });
+  await saveObra(o);
+  showToast('Documento adicionado.');
+  renderTabDocumentos(document.getElementById('tabContent'), o);
+}
+async function removeDocumento(id){
+  const o = state.currentObra;
+  o.documentos = (o.documentos||[]).filter(d=>d.id!==id);
+  await saveObra(o);
+  renderTabDocumentos(document.getElementById('tabContent'), o);
+}
+
+/* ---------------- Status change / delete obra ---------------- */
+async function changeStatus(newStatus){
+  const o = state.currentObra;
+  o.status = newStatus;
+  await saveObra(o);
+  const idx = state.obrasIndex.find(x=>x.id===o.id);
+  if(idx) idx.status = newStatus;
+  await saveObrasIndex();
+  renderSidebar();
+  showToast('Status atualizado para "'+STATUS_LABELS[newStatus]+'".');
+}
+function confirmDeleteObra(){
+  const o = state.currentObra;
+  openModal(`
+    <h3>Excluir "${escapeHtml(o.nome)}"?</h3>
+    <p style="font-size:13px; color:var(--ink-soft); line-height:1.5;">Essa ação remove permanentemente todos os dados desta obra (orçamento, cronograma, sócios e documentos) para todos os sócios. Não é possível desfazer.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn danger" onclick="deleteObra()">Excluir Definitivamente</button>
+    </div>
+  `);
+}
+async function deleteObra(){
+  const o = state.currentObra;
+  await storageDelete('obra:'+o.id, true);
+  state.obrasIndex = state.obrasIndex.filter(x=>x.id!==o.id);
+  await saveObrasIndex();
+  closeModal();
+  showToast('Obra excluída.');
+  goDashboard();
+}
+
+/* ---------------- New / Edit obra modal ---------------- */
+function openObraModal(editing){
+  const o = editing ? state.currentObra : null;
+  openModal(`
+    <h3>${editing ? 'Editar Obra' : 'Nova Obra'}</h3>
+    <div class="field" style="margin-bottom:12px;">
+      <label>Nome da Obra</label>
+      <input type="text" id="m_nome" placeholder="Ex: Casa Rua das Acácias" value="${o?escapeHtml(o.nome):''}">
+    </div>
+    <div class="field" style="margin-bottom:12px;">
+      <label>Endereço</label>
+      <input type="text" id="m_endereco" placeholder="Ex: Rua das Acácias, 123 — Bauru/SP" value="${o?escapeHtml(o.endereco||''):''}">
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn primary" onclick="submitObraModal(${editing?`'${o.id}'`:'null'})">${editing?'Salvar':'Criar Obra'}</button>
+    </div>
+  `);
+}
+async function submitObraModal(editingId){
+  const nome = document.getElementById('m_nome').value.trim();
+  const endereco = document.getElementById('m_endereco').value.trim();
+  if(!nome){ showToast('Dê um nome para a obra.'); return; }
+
+  if(editingId){
+    const o = state.currentObra;
+    o.nome = nome; o.endereco = endereco;
+    await saveObra(o);
+    const idx = state.obrasIndex.find(x=>x.id===o.id);
+    if(idx){ idx.nome = nome; idx.endereco = endereco; }
+    await saveObrasIndex();
+    closeModal();
+    renderSidebar();
+    renderObra();
+    showToast('Obra atualizada.');
+  } else {
+    const id = uid('obra');
+    const novaObra = {
+      id, nome, endereco, status:'prospeccao',
+      dataCompra:'', valorCompra:'', valorVendaEstimado:'', valorVendaReal:'', dataVenda:'', notas:'',
+      despesas: [], etapas: [], socios: [], documentos: []
+    };
+    await saveObra(novaObra);
+    state.obrasIndex.push({ id, nome, endereco, status:'prospeccao' });
+    await saveObrasIndex();
+    closeModal();
+    document.getElementById('topbarMeta').textContent = state.obrasIndex.length + ' obra(s) · dados compartilhados entre sócios';
+    showToast('Obra criada.');
+    openObra(id);
+  }
+}
+
+/* ---------------- Modal helpers ---------------- */
+function openModal(innerHtml){
+  const root = document.getElementById('modalRoot');
+  root.innerHTML = `<div class="overlay" onclick="if(event.target===this) closeModal()"><div class="modal">${innerHtml}</div></div>`;
+}
+function closeModal(){
+  document.getElementById('modalRoot').innerHTML='';
+}
+
+init();
+</script>
+</body>
+</html>
