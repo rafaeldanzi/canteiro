@@ -130,6 +130,7 @@ a{ color: var(--blue); }
   transform: rotate(-1.5deg);
 }
 .stamp.prospeccao{ color: var(--ink-soft); }
+.stamp.negociacao{ color: var(--red); }
 .stamp.reforma{ color: var(--amber); }
 .stamp.venda{ color: var(--blue); }
 .stamp.vendido{ color: var(--green); }
@@ -326,31 +327,35 @@ tbody tr:hover{ background: rgba(44,74,110,0.05); }
 <div id="modalRoot"></div>
 <div id="toastRoot"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 /* =========================================================
-   CANTEIRO — Gestão de Obras (dados compartilhados via storage)
+   CANTEIRO — Gestão de Obras (dados no Supabase)
    ========================================================= */
+
+const SUPABASE_URL = 'https://uniunzhagmqmiljpwsyl.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_jlaRAqO0hhUsPx5TKzUmZg_Dl6LwHPC';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const STATUS_LABELS = {
   prospeccao: 'Prospecção',
+  negociacao: 'Em Negociação',
   reforma: 'Em Reforma',
   venda: 'À Venda',
   vendido: 'Vendido'
 };
-const STATUS_CLASS = { prospeccao:'prospeccao', reforma:'reforma', venda:'venda', vendido:'vendido' };
+const STATUS_CLASS = { prospeccao:'prospeccao', negociacao:'negociacao', reforma:'reforma', venda:'venda', vendido:'vendido' };
 const ETAPA_STATUS = { pendente:'Pendente', andamento:'Em Andamento', concluido:'Concluído' };
 
 let state = {
   obrasIndex: [],   // [{id, nome, status}]
+  allSocios: [],    // registro global de sócios
   currentObra: null, // full obra object currently loaded
   currentView: 'dashboard', // 'dashboard' | 'obra'
   currentTab: 'geral',
   loaded: false
 };
 
-function uid(prefix){
-  return prefix + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,7);
-}
 function fmtMoney(v){
   const n = Number(v)||0;
   return n.toLocaleString('pt-BR', { style:'currency', currency:'BRL' });
@@ -371,42 +376,41 @@ function showToast(msg){
   setTimeout(()=>{ if(el.parentNode) el.parentNode.removeChild(el); }, 2600);
 }
 
-/* ---------------- Storage helpers ---------------- */
-async function storageGet(key, shared){
-  try{
-    const res = await window.storage.get(key, shared);
-    return res ? res.value : null;
-  }catch(e){
-    return null;
-  }
-}
-async function storageSet(key, value, shared){
-  try{
-    const res = await window.storage.set(key, value, shared);
-    return !!res;
-  }catch(e){
-    console.error('storage set failed', e);
-    showToast('Erro ao salvar. Tente novamente.');
-    return false;
-  }
-}
-async function storageDelete(key, shared){
-  try{ await window.storage.delete(key, shared); }catch(e){ /* ignore */ }
-}
-
+/* ---------------- Storage helpers (Supabase) ---------------- */
 async function loadObrasIndex(){
-  const raw = await storageGet('obras-index', true);
-  state.obrasIndex = raw ? JSON.parse(raw) : [];
+  const { data, error } = await sb.from('obras').select('id, nome, endereco, status').order('created_at', { ascending:true });
+  if(error){ console.error(error); showToast('Erro ao carregar obras.'); state.obrasIndex = []; return; }
+  state.obrasIndex = data;
 }
-async function saveObrasIndex(){
-  await storageSet('obras-index', JSON.stringify(state.obrasIndex), true);
+async function loadAllSocios(){
+  const { data, error } = await sb.from('socios').select('*').order('nome', { ascending:true });
+  if(error){ console.error(error); state.allSocios = []; return; }
+  state.allSocios = data;
 }
 async function loadObra(id){
-  const raw = await storageGet('obra:'+id, true);
-  return raw ? JSON.parse(raw) : null;
-}
-async function saveObra(obra){
-  await storageSet('obra:'+obra.id, JSON.stringify(obra), true);
+  const [obraRes, despesasRes, etapasRes, docsRes, atualizRes, particRes] = await Promise.all([
+    sb.from('obras').select('*').eq('id', id).single(),
+    sb.from('despesas').select('*').eq('obra_id', id).order('data', { ascending:false }),
+    sb.from('etapas').select('*').eq('obra_id', id).order('created_at', { ascending:true }),
+    sb.from('documentos').select('*').eq('obra_id', id).order('created_at', { ascending:true }),
+    sb.from('atualizacoes').select('*').eq('obra_id', id).order('data', { ascending:false }),
+    sb.from('participacoes').select('id, percentual, aporte, socio_id, socios(id, nome, email)').eq('obra_id', id)
+  ]);
+  if(obraRes.error || !obraRes.data) return null;
+  const o = obraRes.data;
+  return {
+    id: o.id, nome: o.nome, endereco: o.endereco, status: o.status,
+    dataCompra: o.data_compra || '', valorCompra: o.valor_compra ?? '',
+    valorVendaEstimado: o.valor_venda_estimado ?? '', valorVendaReal: o.valor_venda_real ?? '',
+    dataVenda: o.data_venda || '', notas: o.notas || '',
+    margemLucroAlvo: o.margem_lucro_alvo ?? '', corretorNome: o.corretor_nome || '',
+    comissaoCorretorPercentual: o.comissao_corretor_percentual ?? '',
+    despesas: (despesasRes.data||[]).map(d=>({ id:d.id, categoria:d.categoria, descricao:d.descricao, valor:d.valor, data:d.data })),
+    etapas: (etapasRes.data||[]).map(e=>({ id:e.id, nome:e.nome, inicio:e.inicio, fim:e.fim, status:e.status })),
+    documentos: (docsRes.data||[]).map(d=>({ id:d.id, titulo:d.titulo, link:d.link, nota:d.nota })),
+    atualizacoes: (atualizRes.data||[]).map(a=>({ id:a.id, texto:a.texto, data:a.data })),
+    socios: (particRes.data||[]).map(p=>({ id:p.id, socioId:p.socio_id, nome: p.socios ? p.socios.nome : '(sócio removido)', percentual:p.percentual, aporte:p.aporte }))
+  };
 }
 
 /* ---------------- Computations ---------------- */
@@ -423,9 +427,9 @@ function lucroObra(obra){
 
 /* ---------------- Init ---------------- */
 async function init(){
-  await loadObrasIndex();
+  await Promise.all([loadObrasIndex(), loadAllSocios()]);
   state.loaded = true;
-  document.getElementById('topbarMeta').textContent = state.obrasIndex.length + ' obra(s) · dados compartilhados entre sócios';
+  document.getElementById('topbarMeta').textContent = state.obrasIndex.length + ' obra(s) · dados no Supabase (compartilhado entre sócios)';
   renderSidebar();
   goDashboard();
 }
@@ -460,16 +464,18 @@ async function goDashboard(){
   const main = document.getElementById('main');
   main.innerHTML = '<div class="loading-screen">Calculando totais…</div>';
 
-  const obras = [];
-  for(const o of state.obrasIndex){
-    const full = await loadObra(o.id);
-    if(full) obras.push(full);
-  }
+  const { data, error } = await sb.from('obras').select('*, despesas(valor)').order('created_at', { ascending:true });
+  if(error){ console.error(error); showToast('Erro ao carregar obras.'); main.innerHTML = '<div class="empty">Erro ao carregar dados.</div>'; return; }
+  const obras = data.map(o=>({
+    id:o.id, nome:o.nome, endereco:o.endereco, status:o.status,
+    valorCompra:o.valor_compra, valorVendaEstimado:o.valor_venda_estimado, valorVendaReal:o.valor_venda_real,
+    despesas: o.despesas || []
+  }));
 
   const totalInvestido = obras.reduce((s,o)=> s + (Number(o.valorCompra)||0) + totalDespesas(o), 0);
   const totalGastoReforma = obras.reduce((s,o)=> s + totalDespesas(o), 0);
   const lucroTotal = obras.reduce((s,o)=> s + lucroObra(o), 0);
-  const ativas = obras.filter(o=> o.status==='reforma' || o.status==='venda').length;
+  const ativas = obras.filter(o=> o.status==='negociacao' || o.status==='reforma' || o.status==='venda').length;
 
   main.innerHTML = `
     <h1 class="section-title">Visão Geral</h1>
@@ -559,6 +565,7 @@ function renderObra(){
       <button class="tab-btn ${state.currentTab==='cronograma'?'active':''}" onclick="setTab('cronograma')">Cronograma</button>
       <button class="tab-btn ${state.currentTab==='socios'?'active':''}" onclick="setTab('socios')">Sócios &amp; Lucro</button>
       <button class="tab-btn ${state.currentTab==='documentos'?'active':''}" onclick="setTab('documentos')">Documentos</button>
+      <button class="tab-btn ${state.currentTab==='atualizacoes'?'active':''}" onclick="setTab('atualizacoes')">Atualizações</button>
     </div>
 
     <div id="tabContent"></div>
@@ -576,6 +583,7 @@ function renderTab(){
   if(state.currentTab==='cronograma') return renderTabCronograma(wrap, o);
   if(state.currentTab==='socios') return renderTabSocios(wrap, o);
   if(state.currentTab==='documentos') return renderTabDocumentos(wrap, o);
+  if(state.currentTab==='atualizacoes') return renderTabAtualizacoes(wrap, o);
 }
 
 /* ---- Tab: Visão Geral ---- */
@@ -596,6 +604,9 @@ function renderTabGeral(wrap, o){
           <div class="field"><label>Valor de Venda Estimado (R$)</label><input type="number" step="0.01" id="f_valorVendaEstimado" value="${o.valorVendaEstimado||''}"></div>
           <div class="field"><label>Valor de Venda Real (R$)</label><input type="number" step="0.01" id="f_valorVendaReal" value="${o.valorVendaReal||''}"></div>
           <div class="field"><label>Data da Venda</label><input type="date" id="f_dataVenda" value="${o.dataVenda||''}"></div>
+          <div class="field"><label>Corretor</label><input type="text" id="f_corretorNome" value="${escapeHtml(o.corretorNome||'')}"></div>
+          <div class="field"><label>Comissão Corretor (%)</label><input type="number" step="0.01" id="f_comissaoCorretor" value="${o.comissaoCorretorPercentual||''}"></div>
+          <div class="field"><label>Margem de Lucro Alvo (%)</label><input type="number" step="0.01" id="f_margemLucroAlvo" value="${o.margemLucroAlvo||''}"></div>
         </div>
         <div class="field wide">
           <label>Notas Gerais</label>
@@ -608,15 +619,22 @@ function renderTabGeral(wrap, o){
 }
 async function saveGeral(){
   const o = state.currentObra;
-  o.dataCompra = document.getElementById('f_dataCompra').value;
-  o.valorCompra = document.getElementById('f_valorCompra').value;
-  o.valorVendaEstimado = document.getElementById('f_valorVendaEstimado').value;
-  o.valorVendaReal = document.getElementById('f_valorVendaReal').value;
-  o.dataVenda = document.getElementById('f_dataVenda').value;
-  o.notas = document.getElementById('f_notas').value;
-  await saveObra(o);
+  const payload = {
+    data_compra: document.getElementById('f_dataCompra').value || null,
+    valor_compra: document.getElementById('f_valorCompra').value || null,
+    valor_venda_estimado: document.getElementById('f_valorVendaEstimado').value || null,
+    valor_venda_real: document.getElementById('f_valorVendaReal').value || null,
+    data_venda: document.getElementById('f_dataVenda').value || null,
+    notas: document.getElementById('f_notas').value,
+    corretor_nome: document.getElementById('f_corretorNome').value || null,
+    comissao_corretor_percentual: document.getElementById('f_comissaoCorretor').value || null,
+    margem_lucro_alvo: document.getElementById('f_margemLucroAlvo').value || null
+  };
+  const { error } = await sb.from('obras').update(payload).eq('id', o.id);
+  if(error){ console.error(error); showToast('Erro ao salvar.'); return; }
+  state.currentObra = await loadObra(o.id);
   showToast('Dados salvos.');
-  renderTabGeral(document.getElementById('tabContent'), o);
+  renderTabGeral(document.getElementById('tabContent'), state.currentObra);
 }
 
 /* ---- Tab: Orçamento ---- */
@@ -661,23 +679,24 @@ async function addDespesa(){
   const valor = document.getElementById('d_valor').value;
   if(!valor || Number(valor)<=0){ showToast('Informe um valor válido.'); return; }
   const o = state.currentObra;
-  o.despesas = o.despesas || [];
-  o.despesas.push({
-    id: uid('desp'),
+  const { error } = await sb.from('despesas').insert({
+    obra_id: o.id,
     categoria: document.getElementById('d_categoria').value,
     descricao,
     valor: Number(valor),
-    data: document.getElementById('d_data').value
+    data: document.getElementById('d_data').value || null
   });
-  await saveObra(o);
+  if(error){ console.error(error); showToast('Erro ao salvar despesa.'); return; }
+  state.currentObra = await loadObra(o.id);
   showToast('Despesa adicionada.');
-  renderTabOrcamento(document.getElementById('tabContent'), o);
+  renderTabOrcamento(document.getElementById('tabContent'), state.currentObra);
 }
 async function removeDespesa(id){
   const o = state.currentObra;
-  o.despesas = (o.despesas||[]).filter(d=>d.id!==id);
-  await saveObra(o);
-  renderTabOrcamento(document.getElementById('tabContent'), o);
+  const { error } = await sb.from('despesas').delete().eq('id', id);
+  if(error){ console.error(error); showToast('Erro ao remover despesa.'); return; }
+  state.currentObra = await loadObra(o.id);
+  renderTabOrcamento(document.getElementById('tabContent'), state.currentObra);
 }
 
 /* ---- Tab: Cronograma ---- */
@@ -722,31 +741,34 @@ async function addEtapa(){
   const nome = document.getElementById('e_nome').value.trim();
   if(!nome){ showToast('Dê um nome para a etapa.'); return; }
   const o = state.currentObra;
-  o.etapas = o.etapas || [];
-  o.etapas.push({
-    id: uid('etapa'), nome,
-    inicio: document.getElementById('e_inicio').value,
-    fim: document.getElementById('e_fim').value,
+  const { error } = await sb.from('etapas').insert({
+    obra_id: o.id, nome,
+    inicio: document.getElementById('e_inicio').value || null,
+    fim: document.getElementById('e_fim').value || null,
     status: document.getElementById('e_status').value
   });
-  await saveObra(o);
+  if(error){ console.error(error); showToast('Erro ao salvar etapa.'); return; }
+  state.currentObra = await loadObra(o.id);
   showToast('Etapa adicionada.');
-  renderTabCronograma(document.getElementById('tabContent'), o);
+  renderTabCronograma(document.getElementById('tabContent'), state.currentObra);
 }
 async function cycleEtapaStatus(id){
   const order = ['pendente','andamento','concluido'];
   const o = state.currentObra;
   const et = (o.etapas||[]).find(e=>e.id===id);
   if(!et) return;
-  et.status = order[(order.indexOf(et.status)+1) % order.length];
-  await saveObra(o);
-  renderTabCronograma(document.getElementById('tabContent'), o);
+  const novo = order[(order.indexOf(et.status)+1) % order.length];
+  const { error } = await sb.from('etapas').update({ status: novo }).eq('id', id);
+  if(error){ console.error(error); showToast('Erro ao atualizar etapa.'); return; }
+  state.currentObra = await loadObra(o.id);
+  renderTabCronograma(document.getElementById('tabContent'), state.currentObra);
 }
 async function removeEtapa(id){
   const o = state.currentObra;
-  o.etapas = (o.etapas||[]).filter(e=>e.id!==id);
-  await saveObra(o);
-  renderTabCronograma(document.getElementById('tabContent'), o);
+  const { error } = await sb.from('etapas').delete().eq('id', id);
+  if(error){ console.error(error); showToast('Erro ao remover etapa.'); return; }
+  state.currentObra = await loadObra(o.id);
+  renderTabCronograma(document.getElementById('tabContent'), state.currentObra);
 }
 
 /* ---- Tab: Sócios ---- */
@@ -754,15 +776,27 @@ function renderTabSocios(wrap, o){
   const socios = o.socios || [];
   const totalPct = socios.reduce((s,x)=> s + (Number(x.percentual)||0), 0);
   const lucro = lucroObra(o);
+  const jaAdicionados = new Set(socios.map(s=>s.socioId));
+  const disponiveis = state.allSocios.filter(s=>!jaAdicionados.has(s.id));
   wrap.innerHTML = `
     <div class="panel">
-      <h3>Novo Sócio nesta Obra</h3>
+      <h3>Adicionar Sócio a esta Obra</h3>
       <div class="field-grid">
-        <div class="field"><label>Nome</label><input type="text" id="s_nome"></div>
+        <div class="field">
+          <label>Sócio</label>
+          <select id="s_socio" onchange="document.getElementById('s_novoWrap').style.display = this.value==='__novo__' ? 'flex' : 'none';">
+            <option value="">Selecione…</option>
+            ${disponiveis.map(s=>`<option value="${s.id}">${escapeHtml(s.nome)}</option>`).join('')}
+            <option value="__novo__">+ Novo sócio</option>
+          </select>
+        </div>
+        <div class="field" id="s_novoWrap" style="display:none;">
+          <label>Nome do Novo Sócio</label><input type="text" id="s_novoNome">
+        </div>
         <div class="field"><label>Participação (%)</label><input type="number" step="0.1" id="s_percentual"></div>
         <div class="field"><label>Aporte de Capital (R$)</label><input type="number" step="0.01" id="s_aporte"></div>
       </div>
-      <button class="btn primary" onclick="addSocio()">Adicionar Sócio</button>
+      <button class="btn primary" onclick="addSocio()">Adicionar</button>
     </div>
     <div class="panel">
       <h3>Divisão de Lucro — ${totalPct>100 ? '<span style="color:var(--red)">⚠ soma ultrapassa 100%</span>' : `Total alocado: ${totalPct.toFixed(1)}%`}</h3>
@@ -782,24 +816,34 @@ function renderTabSocios(wrap, o){
   `;
 }
 async function addSocio(){
-  const nome = document.getElementById('s_nome').value.trim();
-  if(!nome){ showToast('Informe o nome do sócio.'); return; }
   const o = state.currentObra;
-  o.socios = o.socios || [];
-  o.socios.push({
-    id: uid('socio'), nome,
-    percentual: document.getElementById('s_percentual').value || 0,
-    aporte: document.getElementById('s_aporte').value || 0
+  const sel = document.getElementById('s_socio').value;
+  const percentual = document.getElementById('s_percentual').value || 0;
+  const aporte = document.getElementById('s_aporte').value || 0;
+  if(!sel){ showToast('Selecione um sócio.'); return; }
+  let socioId = sel;
+  if(sel === '__novo__'){
+    const novoNome = document.getElementById('s_novoNome').value.trim();
+    if(!novoNome){ showToast('Informe o nome do novo sócio.'); return; }
+    const { data, error } = await sb.from('socios').insert({ nome: novoNome }).select().single();
+    if(error){ console.error(error); showToast('Erro ao criar sócio.'); return; }
+    socioId = data.id;
+    await loadAllSocios();
+  }
+  const { error: perr } = await sb.from('participacoes').insert({
+    obra_id: o.id, socio_id: socioId, percentual: Number(percentual), aporte: Number(aporte)
   });
-  await saveObra(o);
-  showToast('Sócio adicionado.');
-  renderTabSocios(document.getElementById('tabContent'), o);
+  if(perr){ console.error(perr); showToast('Erro ao adicionar sócio (talvez já esteja nesta obra).'); return; }
+  state.currentObra = await loadObra(o.id);
+  showToast('Sócio adicionado à obra.');
+  renderTabSocios(document.getElementById('tabContent'), state.currentObra);
 }
 async function removeSocio(id){
   const o = state.currentObra;
-  o.socios = (o.socios||[]).filter(s=>s.id!==id);
-  await saveObra(o);
-  renderTabSocios(document.getElementById('tabContent'), o);
+  const { error } = await sb.from('participacoes').delete().eq('id', id);
+  if(error){ console.error(error); showToast('Erro ao remover sócio.'); return; }
+  state.currentObra = await loadObra(o.id);
+  renderTabSocios(document.getElementById('tabContent'), state.currentObra);
 }
 
 /* ---- Tab: Documentos ---- */
@@ -836,31 +880,79 @@ async function addDocumento(){
   const titulo = document.getElementById('doc_titulo').value.trim();
   if(!titulo){ showToast('Dê um título ao documento.'); return; }
   const o = state.currentObra;
-  o.documentos = o.documentos || [];
-  o.documentos.push({
-    id: uid('doc'), titulo,
-    link: document.getElementById('doc_link').value.trim(),
-    nota: document.getElementById('doc_nota').value.trim()
+  const { error } = await sb.from('documentos').insert({
+    obra_id: o.id, titulo,
+    link: document.getElementById('doc_link').value.trim() || null,
+    nota: document.getElementById('doc_nota').value.trim() || null
   });
-  await saveObra(o);
+  if(error){ console.error(error); showToast('Erro ao salvar documento.'); return; }
+  state.currentObra = await loadObra(o.id);
   showToast('Documento adicionado.');
-  renderTabDocumentos(document.getElementById('tabContent'), o);
+  renderTabDocumentos(document.getElementById('tabContent'), state.currentObra);
 }
 async function removeDocumento(id){
   const o = state.currentObra;
-  o.documentos = (o.documentos||[]).filter(d=>d.id!==id);
-  await saveObra(o);
-  renderTabDocumentos(document.getElementById('tabContent'), o);
+  const { error } = await sb.from('documentos').delete().eq('id', id);
+  if(error){ console.error(error); showToast('Erro ao remover documento.'); return; }
+  state.currentObra = await loadObra(o.id);
+  renderTabDocumentos(document.getElementById('tabContent'), state.currentObra);
+}
+
+/* ---- Tab: Atualizações ---- */
+function renderTabAtualizacoes(wrap, o){
+  const atualizacoes = o.atualizacoes || [];
+  wrap.innerHTML = `
+    <div class="panel">
+      <h3>Nova Atualização</h3>
+      <div class="field-grid">
+        <div class="field wide"><label>Texto</label><textarea id="a_texto" rows="2" placeholder="Ex: Reforma do telhado concluída"></textarea></div>
+        <div class="field"><label>Data</label><input type="date" id="a_data" value="${new Date().toISOString().slice(0,10)}"></div>
+      </div>
+      <button class="btn primary" onclick="addAtualizacao()">Adicionar</button>
+    </div>
+    <div class="panel">
+      <h3>Histórico</h3>
+      ${atualizacoes.length ? atualizacoes.map(a=>`
+        <div class="list-row">
+          <div>
+            <div class="main-txt">${escapeHtml(a.texto)}</div>
+            <div class="sub-txt">${fmtDate(a.data)}</div>
+          </div>
+          <div class="row-actions"><button class="icon-btn" onclick="removeAtualizacao('${a.id}')">✕</button></div>
+        </div>
+      `).join('') : '<div class="empty-side">Nenhuma atualização registrada ainda.</div>'}
+    </div>
+  `;
+}
+async function addAtualizacao(){
+  const texto = document.getElementById('a_texto').value.trim();
+  if(!texto){ showToast('Escreva o texto da atualização.'); return; }
+  const o = state.currentObra;
+  const { error } = await sb.from('atualizacoes').insert({
+    obra_id: o.id, texto,
+    data: document.getElementById('a_data').value || null
+  });
+  if(error){ console.error(error); showToast('Erro ao salvar atualização.'); return; }
+  state.currentObra = await loadObra(o.id);
+  showToast('Atualização adicionada.');
+  renderTabAtualizacoes(document.getElementById('tabContent'), state.currentObra);
+}
+async function removeAtualizacao(id){
+  const o = state.currentObra;
+  const { error } = await sb.from('atualizacoes').delete().eq('id', id);
+  if(error){ console.error(error); showToast('Erro ao remover.'); return; }
+  state.currentObra = await loadObra(o.id);
+  renderTabAtualizacoes(document.getElementById('tabContent'), state.currentObra);
 }
 
 /* ---------------- Status change / delete obra ---------------- */
 async function changeStatus(newStatus){
   const o = state.currentObra;
+  const { error } = await sb.from('obras').update({ status: newStatus }).eq('id', o.id);
+  if(error){ console.error(error); showToast('Erro ao atualizar status.'); return; }
   o.status = newStatus;
-  await saveObra(o);
   const idx = state.obrasIndex.find(x=>x.id===o.id);
   if(idx) idx.status = newStatus;
-  await saveObrasIndex();
   renderSidebar();
   showToast('Status atualizado para "'+STATUS_LABELS[newStatus]+'".');
 }
@@ -877,9 +969,9 @@ function confirmDeleteObra(){
 }
 async function deleteObra(){
   const o = state.currentObra;
-  await storageDelete('obra:'+o.id, true);
+  const { error } = await sb.from('obras').delete().eq('id', o.id);
+  if(error){ console.error(error); showToast('Erro ao excluir obra.'); return; }
   state.obrasIndex = state.obrasIndex.filter(x=>x.id!==o.id);
-  await saveObrasIndex();
   closeModal();
   showToast('Obra excluída.');
   goDashboard();
@@ -910,30 +1002,24 @@ async function submitObraModal(editingId){
   if(!nome){ showToast('Dê um nome para a obra.'); return; }
 
   if(editingId){
-    const o = state.currentObra;
-    o.nome = nome; o.endereco = endereco;
-    await saveObra(o);
-    const idx = state.obrasIndex.find(x=>x.id===o.id);
+    const { error } = await sb.from('obras').update({ nome, endereco }).eq('id', editingId);
+    if(error){ console.error(error); showToast('Erro ao atualizar obra.'); return; }
+    state.currentObra.nome = nome;
+    state.currentObra.endereco = endereco;
+    const idx = state.obrasIndex.find(x=>x.id===editingId);
     if(idx){ idx.nome = nome; idx.endereco = endereco; }
-    await saveObrasIndex();
     closeModal();
     renderSidebar();
     renderObra();
     showToast('Obra atualizada.');
   } else {
-    const id = uid('obra');
-    const novaObra = {
-      id, nome, endereco, status:'prospeccao',
-      dataCompra:'', valorCompra:'', valorVendaEstimado:'', valorVendaReal:'', dataVenda:'', notas:'',
-      despesas: [], etapas: [], socios: [], documentos: []
-    };
-    await saveObra(novaObra);
-    state.obrasIndex.push({ id, nome, endereco, status:'prospeccao' });
-    await saveObrasIndex();
+    const { data, error } = await sb.from('obras').insert({ nome, endereco, status:'prospeccao' }).select().single();
+    if(error){ console.error(error); showToast('Erro ao criar obra.'); return; }
+    await loadObrasIndex();
     closeModal();
-    document.getElementById('topbarMeta').textContent = state.obrasIndex.length + ' obra(s) · dados compartilhados entre sócios';
+    document.getElementById('topbarMeta').textContent = state.obrasIndex.length + ' obra(s) · dados no Supabase (compartilhado entre sócios)';
     showToast('Obra criada.');
-    openObra(id);
+    openObra(data.id);
   }
 }
 
