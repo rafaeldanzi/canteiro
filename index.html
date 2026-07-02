@@ -360,6 +360,27 @@ function fmtMoney(v){
   const n = Number(v)||0;
   return n.toLocaleString('pt-BR', { style:'currency', currency:'BRL' });
 }
+/* ---- Máscara de valor em Reais (reconhecimento de dígito) ---- */
+function moneyInputValue(v){
+  if(v===null || v===undefined || v==='') return '';
+  return fmtMoney(v);
+}
+function moneyMaskInput(el){
+  let digits = el.value.replace(/\D/g,'');
+  if(!digits){ el.value=''; return; }
+  digits = digits.replace(/^0+(?=\d)/, '');
+  while(digits.length<3) digits = '0'+digits;
+  const cents = digits.slice(-2);
+  let intPart = digits.slice(0,-2).replace(/^0+(?=\d)/, '') || '0';
+  intPart = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  el.value = 'R$ ' + intPart + ',' + cents;
+}
+function money2num(str){
+  if(!str) return null;
+  const cleaned = String(str).replace(/[^\d,.-]/g,'').replace(/\./g,'').replace(',', '.');
+  const n = parseFloat(cleaned);
+  return isNaN(n) ? null : n;
+}
 function fmtDate(d){
   if(!d) return '—';
   const parts = d.split('-');
@@ -475,7 +496,39 @@ async function goDashboard(){
   const totalInvestido = obras.reduce((s,o)=> s + (Number(o.valorCompra)||0) + totalDespesas(o), 0);
   const totalGastoReforma = obras.reduce((s,o)=> s + totalDespesas(o), 0);
   const lucroTotal = obras.reduce((s,o)=> s + lucroObra(o), 0);
+  const statusOrder = ['negociacao','reforma','venda','prospeccao','vendido'];
   const ativas = obras.filter(o=> o.status==='negociacao' || o.status==='reforma' || o.status==='venda').length;
+  const porStatus = statusOrder.map(k=>({ k, n: obras.filter(o=>o.status===k).length })).filter(x=>x.n>0);
+
+  const ativasList = obras.filter(o=>o.status!=='vendido');
+  const concluidasList = obras.filter(o=>o.status==='vendido');
+
+  function tableRows(list){
+    return list.map(o=>`
+      <tr onclick="openObra('${o.id}')" data-nome="${escapeHtml((o.nome+' '+(o.endereco||'')).toLowerCase())}">
+        <td><strong>${escapeHtml(o.nome)}</strong><br><span style="color:var(--ink-soft);font-size:11.5px;">${escapeHtml(o.endereco||'')}</span></td>
+        <td><span class="stamp ${STATUS_CLASS[o.status]}">${STATUS_LABELS[o.status]}</span></td>
+        <td class="num">${fmtMoney(o.valorCompra)}</td>
+        <td class="num">${fmtMoney(totalDespesas(o))}</td>
+        <td class="num">${fmtMoney(valorVendaEfetivo(o))}${o.valorVendaReal? '' : ' (est.)'}</td>
+        <td class="num" style="font-weight:700; color:${lucroObra(o)>=0?'var(--green)':'var(--red)'}">${fmtMoney(lucroObra(o))}</td>
+      </tr>
+    `).join('');
+  }
+  function tableBlock(title, list){
+    if(!list.length) return '';
+    return `
+      <h3 style="font-size:13px; text-transform:uppercase; letter-spacing:0.8px; color:var(--ink-soft); margin: 22px 0 10px;">${title} (${list.length})</h3>
+      <div class="obras-table-wrap resumo-table">
+        <table>
+          <thead><tr>
+            <th>Obra</th><th>Status</th><th>Compra</th><th>Gasto Reforma</th><th>Venda (est./real)</th><th>Lucro</th>
+          </tr></thead>
+          <tbody>${tableRows(list)}</tbody>
+        </table>
+      </div>
+    `;
+  }
 
   main.innerHTML = `
     <h1 class="section-title">Visão Geral</h1>
@@ -501,24 +554,16 @@ async function goDashboard(){
     </div>
 
     ${obras.length ? `
-    <div class="obras-table-wrap">
-      <table>
-        <thead><tr>
-          <th>Obra</th><th>Status</th><th>Compra</th><th>Gasto Reforma</th><th>Venda (est./real)</th><th>Lucro</th>
-        </tr></thead>
-        <tbody>
-          ${obras.map(o=>`
-            <tr onclick="openObra('${o.id}')">
-              <td><strong>${escapeHtml(o.nome)}</strong><br><span style="color:var(--ink-soft);font-size:11.5px;">${escapeHtml(o.endereco||'')}</span></td>
-              <td><span class="stamp ${STATUS_CLASS[o.status]}">${STATUS_LABELS[o.status]}</span></td>
-              <td class="num">${fmtMoney(o.valorCompra)}</td>
-              <td class="num">${fmtMoney(totalDespesas(o))}</td>
-              <td class="num">${fmtMoney(valorVendaEfetivo(o))}${o.valorVendaReal? '' : ' (est.)'}</td>
-              <td class="num" style="font-weight:700; color:${lucroObra(o)>=0?'var(--green)':'var(--red)'}">${fmtMoney(lucroObra(o))}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap; margin-bottom:16px;">
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        ${porStatus.map(x=>`<span class="stamp ${STATUS_CLASS[x.k]}">${STATUS_LABELS[x.k]} · ${x.n}</span>`).join('')}
+      </div>
+      <input type="text" id="resumoFiltro" placeholder="Buscar obra por nome ou endereço…" oninput="filtrarResumo(this.value)"
+        style="padding:8px 10px; border:1px solid var(--line-strong); border-radius:var(--radius); background:rgba(255,255,255,0.6); font-size:13px; min-width:240px;">
+    </div>
+    <div id="resumoTabelas">
+      ${tableBlock('Obras Ativas / Em Andamento', ativasList)}
+      ${tableBlock('Concluídas / Vendidas', concluidasList)}
     </div>
     ` : `
     <div class="empty">
@@ -527,6 +572,12 @@ async function goDashboard(){
     </div>
     `}
   `;
+}
+function filtrarResumo(termo){
+  const q = termo.trim().toLowerCase();
+  document.querySelectorAll('#resumoTabelas tbody tr').forEach(tr=>{
+    tr.style.display = !q || (tr.dataset.nome||'').includes(q) ? '' : 'none';
+  });
 }
 
 /* ---------------- Obra detail ---------------- */
@@ -600,9 +651,9 @@ function renderTabGeral(wrap, o){
       <form id="geralForm" onsubmit="return false;">
         <div class="field-grid">
           <div class="field"><label>Data da Compra</label><input type="date" id="f_dataCompra" value="${o.dataCompra||''}"></div>
-          <div class="field"><label>Valor de Compra (R$)</label><input type="number" step="0.01" id="f_valorCompra" value="${o.valorCompra||''}"></div>
-          <div class="field"><label>Valor de Venda Estimado (R$)</label><input type="number" step="0.01" id="f_valorVendaEstimado" value="${o.valorVendaEstimado||''}"></div>
-          <div class="field"><label>Valor de Venda Real (R$)</label><input type="number" step="0.01" id="f_valorVendaReal" value="${o.valorVendaReal||''}"></div>
+          <div class="field"><label>Valor de Compra (R$)</label><input type="text" inputmode="decimal" id="f_valorCompra" value="${moneyInputValue(o.valorCompra)}" oninput="moneyMaskInput(this)"></div>
+          <div class="field"><label>Valor de Venda Estimado (R$)</label><input type="text" inputmode="decimal" id="f_valorVendaEstimado" value="${moneyInputValue(o.valorVendaEstimado)}" oninput="moneyMaskInput(this)"></div>
+          <div class="field"><label>Valor de Venda Real (R$)</label><input type="text" inputmode="decimal" id="f_valorVendaReal" value="${moneyInputValue(o.valorVendaReal)}" oninput="moneyMaskInput(this)"></div>
           <div class="field"><label>Data da Venda</label><input type="date" id="f_dataVenda" value="${o.dataVenda||''}"></div>
           <div class="field"><label>Corretor</label><input type="text" id="f_corretorNome" value="${escapeHtml(o.corretorNome||'')}"></div>
           <div class="field"><label>Comissão Corretor (%)</label><input type="number" step="0.01" id="f_comissaoCorretor" value="${o.comissaoCorretorPercentual||''}"></div>
@@ -621,9 +672,9 @@ async function saveGeral(){
   const o = state.currentObra;
   const payload = {
     data_compra: document.getElementById('f_dataCompra').value || null,
-    valor_compra: document.getElementById('f_valorCompra').value || null,
-    valor_venda_estimado: document.getElementById('f_valorVendaEstimado').value || null,
-    valor_venda_real: document.getElementById('f_valorVendaReal').value || null,
+    valor_compra: money2num(document.getElementById('f_valorCompra').value),
+    valor_venda_estimado: money2num(document.getElementById('f_valorVendaEstimado').value),
+    valor_venda_real: money2num(document.getElementById('f_valorVendaReal').value),
     data_venda: document.getElementById('f_dataVenda').value || null,
     notas: document.getElementById('f_notas').value,
     corretor_nome: document.getElementById('f_corretorNome').value || null,
@@ -652,7 +703,7 @@ function renderTabOrcamento(wrap, o){
           </select>
         </div>
         <div class="field"><label>Descrição</label><input type="text" id="d_descricao" placeholder="Ex: Tinta e pintura"></div>
-        <div class="field"><label>Valor (R$)</label><input type="number" step="0.01" id="d_valor"></div>
+        <div class="field"><label>Valor (R$)</label><input type="text" inputmode="decimal" id="d_valor" oninput="moneyMaskInput(this)"></div>
         <div class="field"><label>Data</label><input type="date" id="d_data"></div>
       </div>
       <button class="btn primary" onclick="addDespesa()">Adicionar Despesa</button>
@@ -667,7 +718,7 @@ function renderTabOrcamento(wrap, o){
           </div>
           <div style="display:flex; align-items:center; gap:12px;">
             <div class="amount">${fmtMoney(d.valor)}</div>
-            <div class="row-actions"><button class="icon-btn" onclick="removeDespesa('${d.id}')">✕</button></div>
+            <div class="row-actions"><button class="icon-btn" onclick="confirmRemoveDespesa('${d.id}', '${escapeHtml((d.descricao||d.categoria)||'').replace(/'/g,"\\'")}')">✕</button></div>
           </div>
         </div>
       `).join('') : '<div class="empty-side">Nenhuma despesa lançada ainda.</div>'}
@@ -676,8 +727,8 @@ function renderTabOrcamento(wrap, o){
 }
 async function addDespesa(){
   const descricao = document.getElementById('d_descricao').value.trim();
-  const valor = document.getElementById('d_valor').value;
-  if(!valor || Number(valor)<=0){ showToast('Informe um valor válido.'); return; }
+  const valor = money2num(document.getElementById('d_valor').value);
+  if(!valor || valor<=0){ showToast('Informe um valor válido.'); return; }
   const o = state.currentObra;
   const { error } = await sb.from('despesas').insert({
     obra_id: o.id,
@@ -691,11 +742,22 @@ async function addDespesa(){
   showToast('Despesa adicionada.');
   renderTabOrcamento(document.getElementById('tabContent'), state.currentObra);
 }
+function confirmRemoveDespesa(id, label){
+  openModal(`
+    <h3>Excluir despesa?</h3>
+    <p style="font-size:13px; color:var(--ink-soft); line-height:1.5;">Remover "${label}" do orçamento desta obra. Não é possível desfazer.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn danger" onclick="closeModal(); removeDespesa('${id}');">Excluir</button>
+    </div>
+  `);
+}
 async function removeDespesa(id){
   const o = state.currentObra;
   const { error } = await sb.from('despesas').delete().eq('id', id);
   if(error){ console.error(error); showToast('Erro ao remover despesa.'); return; }
   state.currentObra = await loadObra(o.id);
+  showToast('Despesa removida.');
   renderTabOrcamento(document.getElementById('tabContent'), state.currentObra);
 }
 
@@ -729,7 +791,7 @@ function renderTabCronograma(wrap, o){
             <div class="tl-dates">${fmtDate(e.inicio)} → ${fmtDate(e.fim)}</div>
             <div class="row-actions" style="margin-top:6px;">
               <button class="btn small" onclick="cycleEtapaStatus('${e.id}')">Avançar status</button>
-              <button class="icon-btn" onclick="removeEtapa('${e.id}')">✕</button>
+              <button class="icon-btn" onclick="confirmRemoveEtapa('${e.id}', '${escapeHtml(e.nome).replace(/'/g,"\\'")}')">✕</button>
             </div>
           </div>
         `).join('')}
@@ -763,11 +825,22 @@ async function cycleEtapaStatus(id){
   state.currentObra = await loadObra(o.id);
   renderTabCronograma(document.getElementById('tabContent'), state.currentObra);
 }
+function confirmRemoveEtapa(id, nome){
+  openModal(`
+    <h3>Excluir etapa "${nome}"?</h3>
+    <p style="font-size:13px; color:var(--ink-soft); line-height:1.5;">Remove a etapa do cronograma desta obra. Não é possível desfazer.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn danger" onclick="closeModal(); removeEtapa('${id}');">Excluir</button>
+    </div>
+  `);
+}
 async function removeEtapa(id){
   const o = state.currentObra;
   const { error } = await sb.from('etapas').delete().eq('id', id);
   if(error){ console.error(error); showToast('Erro ao remover etapa.'); return; }
   state.currentObra = await loadObra(o.id);
+  showToast('Etapa removida.');
   renderTabCronograma(document.getElementById('tabContent'), state.currentObra);
 }
 
@@ -794,7 +867,7 @@ function renderTabSocios(wrap, o){
           <label>Nome do Novo Sócio</label><input type="text" id="s_novoNome">
         </div>
         <div class="field"><label>Participação (%)</label><input type="number" step="0.1" id="s_percentual"></div>
-        <div class="field"><label>Aporte de Capital (R$)</label><input type="number" step="0.01" id="s_aporte"></div>
+        <div class="field"><label>Aporte de Capital (R$)</label><input type="text" inputmode="decimal" id="s_aporte" oninput="moneyMaskInput(this)"></div>
       </div>
       <button class="btn primary" onclick="addSocio()">Adicionar</button>
     </div>
@@ -819,7 +892,7 @@ async function addSocio(){
   const o = state.currentObra;
   const sel = document.getElementById('s_socio').value;
   const percentual = document.getElementById('s_percentual').value || 0;
-  const aporte = document.getElementById('s_aporte').value || 0;
+  const aporte = money2num(document.getElementById('s_aporte').value) || 0;
   if(!sel){ showToast('Selecione um sócio.'); return; }
   let socioId = sel;
   if(sel === '__novo__'){
@@ -918,11 +991,47 @@ function renderTabAtualizacoes(wrap, o){
             <div class="main-txt">${escapeHtml(a.texto)}</div>
             <div class="sub-txt">${fmtDate(a.data)}</div>
           </div>
-          <div class="row-actions"><button class="icon-btn" onclick="removeAtualizacao('${a.id}')">✕</button></div>
+          <div class="row-actions">
+            <button class="icon-btn" onclick="editAtualizacaoModal('${a.id}')" title="Editar">✎</button>
+            <button class="icon-btn" onclick="removeAtualizacao('${a.id}')">✕</button>
+          </div>
         </div>
       `).join('') : '<div class="empty-side">Nenhuma atualização registrada ainda.</div>'}
     </div>
   `;
+}
+function editAtualizacaoModal(id){
+  const o = state.currentObra;
+  const a = (o.atualizacoes||[]).find(x=>x.id===id);
+  if(!a) return;
+  openModal(`
+    <h3>Editar Atualização</h3>
+    <div class="field" style="margin-bottom:12px;">
+      <label>Texto</label>
+      <textarea id="ea_texto" rows="3">${escapeHtml(a.texto)}</textarea>
+    </div>
+    <div class="field" style="margin-bottom:12px;">
+      <label>Data</label>
+      <input type="date" id="ea_data" value="${a.data||''}">
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn primary" onclick="saveEditAtualizacao('${id}')">Salvar</button>
+    </div>
+  `);
+}
+async function saveEditAtualizacao(id){
+  const texto = document.getElementById('ea_texto').value.trim();
+  if(!texto){ showToast('Escreva o texto da atualização.'); return; }
+  const o = state.currentObra;
+  const { error } = await sb.from('atualizacoes').update({
+    texto, data: document.getElementById('ea_data').value || null
+  }).eq('id', id);
+  if(error){ console.error(error); showToast('Erro ao salvar atualização.'); return; }
+  state.currentObra = await loadObra(o.id);
+  closeModal();
+  showToast('Atualização editada.');
+  renderTabAtualizacoes(document.getElementById('tabContent'), state.currentObra);
 }
 async function addAtualizacao(){
   const texto = document.getElementById('a_texto').value.trim();
