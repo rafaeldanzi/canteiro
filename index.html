@@ -294,6 +294,19 @@ tbody tr:hover{ background: rgba(44,74,110,0.05); }
 
 .loading-screen{ display:flex; align-items:center; justify-content:center; height: 60vh; color: var(--ink-soft); font-size:13px; }
 
+.photo-grid{ display:grid; grid-template-columns: repeat(auto-fill, minmax(140px,1fr)); gap:12px; }
+.photo-thumb{
+  border:1px solid var(--line); border-radius: var(--radius); overflow:hidden; cursor:pointer;
+  background: rgba(255,255,255,0.4); position:relative;
+}
+.photo-thumb img{ width:100%; height:120px; object-fit:cover; display:block; }
+.photo-thumb .cap{ font-size:11px; color:var(--ink-soft); padding:6px 8px; border-top:1px solid var(--line); }
+.photo-thumb .rm{
+  position:absolute; top:4px; right:4px; width:22px; height:22px; border-radius:50%;
+  background: rgba(30,33,36,0.75); color:#fff; border:none; font-size:12px; display:flex; align-items:center; justify-content:center;
+}
+.file-link{ font-size:12.5px; font-weight:600; }
+
 @media (max-width: 860px){
   .body{ flex-direction:column; }
   .sidebar{ width:100%; border-right:none; border-bottom: 1.5px solid var(--ink); max-height: 260px; }
@@ -336,6 +349,35 @@ tbody tr:hover{ background: rgba(44,74,110,0.05); }
 const SUPABASE_URL = 'https://uniunzhagmqmiljpwsyl.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_jlaRAqO0hhUsPx5TKzUmZg_Dl6LwHPC';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const MEDIA_BUCKET = 'canteiro-media';
+
+/* ---------------- Storage helpers (arquivos/fotos) ---------------- */
+async function uploadArquivo(file, pastaPrefixo){
+  const ext = file.name && file.name.includes('.') ? file.name.slice(file.name.lastIndexOf('.')) : '';
+  const path = `${pastaPrefixo}/${crypto.randomUUID()}${ext}`;
+  const { error } = await sb.storage.from(MEDIA_BUCKET).upload(path, file, { upsert:false, contentType: file.type || undefined });
+  if(error) throw error;
+  return path;
+}
+function arquivoUrl(path){
+  if(!path) return '';
+  return sb.storage.from(MEDIA_BUCKET).getPublicUrl(path).data.publicUrl;
+}
+async function removeArquivo(path){
+  if(!path) return;
+  await sb.storage.from(MEDIA_BUCKET).remove([path]);
+}
+function openPhotoModal(path, titulo){
+  const url = arquivoUrl(path);
+  openModal(`
+    <h3>${escapeHtml(titulo||'Foto')}</h3>
+    <img src="${url}" alt="${escapeHtml(titulo||'Foto')}" style="width:100%; border-radius:var(--radius); border:1px solid var(--line); display:block; margin-bottom:14px;">
+    <div class="modal-actions">
+      <a class="btn" href="${url}" target="_blank" rel="noopener" style="text-decoration:none;">Abrir original</a>
+      <button class="btn primary" onclick="closeModal()">Fechar</button>
+    </div>
+  `);
+}
 
 const STATUS_LABELS = {
   prospeccao: 'Prospecção',
@@ -409,13 +451,14 @@ async function loadAllSocios(){
   state.allSocios = data;
 }
 async function loadObra(id){
-  const [obraRes, despesasRes, etapasRes, docsRes, atualizRes, particRes] = await Promise.all([
+  const [obraRes, despesasRes, etapasRes, docsRes, atualizRes, particRes, fotosRes] = await Promise.all([
     sb.from('obras').select('*').eq('id', id).single(),
     sb.from('despesas').select('*').eq('obra_id', id).order('data', { ascending:false }),
     sb.from('etapas').select('*').eq('obra_id', id).order('created_at', { ascending:true }),
     sb.from('documentos').select('*').eq('obra_id', id).order('created_at', { ascending:true }),
     sb.from('atualizacoes').select('*').eq('obra_id', id).order('data', { ascending:false }),
-    sb.from('participacoes').select('id, percentual, aporte, socio_id, socios(id, nome, email)').eq('obra_id', id)
+    sb.from('participacoes').select('id, percentual, aporte, socio_id, socios(id, nome, email)').eq('obra_id', id),
+    sb.from('fotos').select('*').eq('obra_id', id).order('created_at', { ascending:false })
   ]);
   if(obraRes.error || !obraRes.data) return null;
   const o = obraRes.data;
@@ -427,10 +470,11 @@ async function loadObra(id){
     margemLucroAlvo: o.margem_lucro_alvo ?? '', corretorNome: o.corretor_nome || '',
     comissaoCorretorPercentual: o.comissao_corretor_percentual ?? '',
     despesas: (despesasRes.data||[]).map(d=>({ id:d.id, categoria:d.categoria, descricao:d.descricao, valor:d.valor, data:d.data })),
-    etapas: (etapasRes.data||[]).map(e=>({ id:e.id, nome:e.nome, inicio:e.inicio, fim:e.fim, status:e.status })),
-    documentos: (docsRes.data||[]).map(d=>({ id:d.id, titulo:d.titulo, link:d.link, nota:d.nota })),
+    etapas: (etapasRes.data||[]).map(e=>({ id:e.id, nome:e.nome, inicio:e.inicio, fim:e.fim, status:e.status, fotoPath:e.foto_path, fotoNome:e.foto_nome })),
+    documentos: (docsRes.data||[]).map(d=>({ id:d.id, titulo:d.titulo, link:d.link, nota:d.nota, arquivoPath:d.arquivo_path, arquivoNome:d.arquivo_nome, arquivoTipo:d.arquivo_tipo })),
     atualizacoes: (atualizRes.data||[]).map(a=>({ id:a.id, texto:a.texto, data:a.data })),
-    socios: (particRes.data||[]).map(p=>({ id:p.id, socioId:p.socio_id, nome: p.socios ? p.socios.nome : '(sócio removido)', percentual:p.percentual, aporte:p.aporte }))
+    socios: (particRes.data||[]).map(p=>({ id:p.id, socioId:p.socio_id, nome: p.socios ? p.socios.nome : '(sócio removido)', percentual:p.percentual, aporte:p.aporte })),
+    fotos: (fotosRes.data||[]).map(f=>({ id:f.id, storagePath:f.storage_path, legenda:f.legenda }))
   };
 }
 
@@ -616,6 +660,7 @@ function renderObra(){
       <button class="tab-btn ${state.currentTab==='cronograma'?'active':''}" onclick="setTab('cronograma')">Cronograma</button>
       <button class="tab-btn ${state.currentTab==='socios'?'active':''}" onclick="setTab('socios')">Sócios &amp; Lucro</button>
       <button class="tab-btn ${state.currentTab==='documentos'?'active':''}" onclick="setTab('documentos')">Documentos</button>
+      <button class="tab-btn ${state.currentTab==='fotos'?'active':''}" onclick="setTab('fotos')">Fotos</button>
       <button class="tab-btn ${state.currentTab==='atualizacoes'?'active':''}" onclick="setTab('atualizacoes')">Atualizações</button>
     </div>
 
@@ -634,6 +679,7 @@ function renderTab(){
   if(state.currentTab==='cronograma') return renderTabCronograma(wrap, o);
   if(state.currentTab==='socios') return renderTabSocios(wrap, o);
   if(state.currentTab==='documentos') return renderTabDocumentos(wrap, o);
+  if(state.currentTab==='fotos') return renderTabFotos(wrap, o);
   if(state.currentTab==='atualizacoes') return renderTabAtualizacoes(wrap, o);
 }
 
@@ -776,8 +822,9 @@ function renderTabCronograma(wrap, o){
             <option value="pendente">Pendente</option><option value="andamento">Em Andamento</option><option value="concluido">Concluído</option>
           </select>
         </div>
+        <div class="field"><label>Foto (opcional)</label><input type="file" id="e_foto" accept="image/*"></div>
       </div>
-      <button class="btn primary" onclick="addEtapa()">Adicionar Etapa</button>
+      <button class="btn primary" id="e_btnAdd" onclick="addEtapa()">Adicionar Etapa</button>
     </div>
     <div class="panel">
       <h3>Cronograma</h3>
@@ -791,6 +838,9 @@ function renderTabCronograma(wrap, o){
             <div class="tl-dates">${fmtDate(e.inicio)} → ${fmtDate(e.fim)}</div>
             <div class="row-actions" style="margin-top:6px;">
               <button class="btn small" onclick="cycleEtapaStatus('${e.id}')">Avançar status</button>
+              ${e.fotoPath
+                ? `<button class="btn small" onclick="openPhotoModal('${e.fotoPath}', '${escapeHtml(e.nome).replace(/'/g,"\\'")}')">📷 Ver foto</button>`
+                : `<button class="btn small ghost" onclick="attachEtapaFotoModal('${e.id}')">📷 Anexar foto</button>`}
               <button class="icon-btn" onclick="confirmRemoveEtapa('${e.id}', '${escapeHtml(e.nome).replace(/'/g,"\\'")}')">✕</button>
             </div>
           </div>
@@ -803,16 +853,66 @@ async function addEtapa(){
   const nome = document.getElementById('e_nome').value.trim();
   if(!nome){ showToast('Dê um nome para a etapa.'); return; }
   const o = state.currentObra;
-  const { error } = await sb.from('etapas').insert({
-    obra_id: o.id, nome,
-    inicio: document.getElementById('e_inicio').value || null,
-    fim: document.getElementById('e_fim').value || null,
-    status: document.getElementById('e_status').value
-  });
-  if(error){ console.error(error); showToast('Erro ao salvar etapa.'); return; }
-  state.currentObra = await loadObra(o.id);
-  showToast('Etapa adicionada.');
-  renderTabCronograma(document.getElementById('tabContent'), state.currentObra);
+  const file = document.getElementById('e_foto').files[0];
+  const btn = document.getElementById('e_btnAdd');
+  btn.disabled = true;
+  try{
+    let fotoPath = null, fotoNome = null;
+    if(file){
+      btn.textContent = 'Enviando foto…';
+      fotoPath = await uploadArquivo(file, `etapas/${o.id}`);
+      fotoNome = file.name;
+    }
+    const { error } = await sb.from('etapas').insert({
+      obra_id: o.id, nome,
+      inicio: document.getElementById('e_inicio').value || null,
+      fim: document.getElementById('e_fim').value || null,
+      status: document.getElementById('e_status').value,
+      foto_path: fotoPath, foto_nome: fotoNome
+    });
+    if(error) throw error;
+    state.currentObra = await loadObra(o.id);
+    showToast('Etapa adicionada.');
+    renderTabCronograma(document.getElementById('tabContent'), state.currentObra);
+  }catch(err){
+    console.error(err);
+    showToast('Erro ao salvar etapa.');
+    btn.disabled = false;
+    btn.textContent = 'Adicionar Etapa';
+  }
+}
+function attachEtapaFotoModal(id){
+  openModal(`
+    <h3>Anexar Foto da Etapa</h3>
+    <div class="field" style="margin-bottom:14px;">
+      <label>Foto</label>
+      <input type="file" id="ef_arquivo" accept="image/*">
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn primary" id="ef_btnSalvar" onclick="saveEtapaFoto('${id}')">Salvar</button>
+    </div>
+  `);
+}
+async function saveEtapaFoto(id){
+  const file = document.getElementById('ef_arquivo').files[0];
+  if(!file){ showToast('Selecione uma foto.'); return; }
+  const o = state.currentObra;
+  const btn = document.getElementById('ef_btnSalvar');
+  btn.disabled = true; btn.textContent = 'Enviando…';
+  try{
+    const path = await uploadArquivo(file, `etapas/${o.id}`);
+    const { error } = await sb.from('etapas').update({ foto_path: path, foto_nome: file.name }).eq('id', id);
+    if(error) throw error;
+    state.currentObra = await loadObra(o.id);
+    closeModal();
+    showToast('Foto anexada à etapa.');
+    renderTabCronograma(document.getElementById('tabContent'), state.currentObra);
+  }catch(err){
+    console.error(err);
+    showToast('Erro ao anexar foto.');
+    btn.disabled = false; btn.textContent = 'Salvar';
+  }
 }
 async function cycleEtapaStatus(id){
   const order = ['pendente','andamento','concluido'];
@@ -924,16 +1024,17 @@ function renderTabDocumentos(wrap, o){
   const docs = o.documentos || [];
   wrap.innerHTML = `
     <div class="share-note">
-      Este espaço guarda <strong>links e anotações</strong> de documentos (contratos, matrícula, fotos no Drive, etc.) — não é possível anexar arquivos diretamente aqui. Cole o link de onde o arquivo está hospedado (Google Drive, Dropbox etc.).
+      Anexe o arquivo direto (qualquer formato: PDF, imagem, planilha etc.) ou, se preferir, cole apenas um link (Google Drive, Dropbox etc.).
     </div>
     <div class="panel">
-      <h3>Novo Documento / Link</h3>
+      <h3>Novo Documento</h3>
       <div class="field-grid">
-        <div class="field"><label>Título</label><input type="text" id="doc_titulo" placeholder="Ex: Escritura, Fotos Antes/Depois"></div>
+        <div class="field"><label>Título</label><input type="text" id="doc_titulo" placeholder="Ex: Escritura, Contrato"></div>
+        <div class="field"><label>Arquivo (opcional, qualquer formato)</label><input type="file" id="doc_arquivo"></div>
         <div class="field wide"><label>Link (opcional)</label><input type="text" id="doc_link" placeholder="https://..."></div>
         <div class="field wide"><label>Anotação</label><textarea id="doc_nota" rows="2"></textarea></div>
       </div>
-      <button class="btn primary" onclick="addDocumento()">Adicionar</button>
+      <button class="btn primary" id="doc_btnAdd" onclick="addDocumento()">Adicionar</button>
     </div>
     <div class="panel">
       <h3>Documentos</h3>
@@ -941,9 +1042,13 @@ function renderTabDocumentos(wrap, o){
         <div class="list-row">
           <div>
             <div class="main-txt">${escapeHtml(d.titulo)}</div>
-            <div class="sub-txt">${d.link ? `<a href="${escapeHtml(d.link)}" target="_blank" rel="noopener">${escapeHtml(d.link)}</a>` : ''} ${d.nota ? '· '+escapeHtml(d.nota) : ''}</div>
+            <div class="sub-txt">
+              ${d.arquivoPath ? `<a class="file-link" href="${arquivoUrl(d.arquivoPath)}" target="_blank" rel="noopener">📎 ${escapeHtml(d.arquivoNome||'Abrir arquivo')}</a>` : ''}
+              ${d.link ? ` ${d.arquivoPath?'· ':''}<a href="${escapeHtml(d.link)}" target="_blank" rel="noopener">${escapeHtml(d.link)}</a>` : ''}
+              ${d.nota ? ' · '+escapeHtml(d.nota) : ''}
+            </div>
           </div>
-          <div class="row-actions"><button class="icon-btn" onclick="removeDocumento('${d.id}')">✕</button></div>
+          <div class="row-actions"><button class="icon-btn" onclick="confirmRemoveDocumento('${d.id}', '${escapeHtml(d.titulo).replace(/'/g,"\\'")}')">✕</button></div>
         </div>
       `).join('') : '<div class="empty-side">Nenhum documento registrado ainda.</div>'}
     </div>
@@ -953,22 +1058,122 @@ async function addDocumento(){
   const titulo = document.getElementById('doc_titulo').value.trim();
   if(!titulo){ showToast('Dê um título ao documento.'); return; }
   const o = state.currentObra;
-  const { error } = await sb.from('documentos').insert({
-    obra_id: o.id, titulo,
-    link: document.getElementById('doc_link').value.trim() || null,
-    nota: document.getElementById('doc_nota').value.trim() || null
-  });
-  if(error){ console.error(error); showToast('Erro ao salvar documento.'); return; }
-  state.currentObra = await loadObra(o.id);
-  showToast('Documento adicionado.');
-  renderTabDocumentos(document.getElementById('tabContent'), state.currentObra);
+  const file = document.getElementById('doc_arquivo').files[0];
+  const btn = document.getElementById('doc_btnAdd');
+  btn.disabled = true;
+  let arquivoPath = null, arquivoNome = null, arquivoTipo = null;
+  try{
+    if(file){
+      btn.textContent = 'Enviando arquivo…';
+      arquivoPath = await uploadArquivo(file, `documentos/${o.id}`);
+      arquivoNome = file.name;
+      arquivoTipo = file.type || null;
+    }
+    const { error } = await sb.from('documentos').insert({
+      obra_id: o.id, titulo,
+      link: document.getElementById('doc_link').value.trim() || null,
+      nota: document.getElementById('doc_nota').value.trim() || null,
+      arquivo_path: arquivoPath, arquivo_nome: arquivoNome, arquivo_tipo: arquivoTipo
+    });
+    if(error) throw error;
+    state.currentObra = await loadObra(o.id);
+    showToast('Documento adicionado.');
+    renderTabDocumentos(document.getElementById('tabContent'), state.currentObra);
+  }catch(err){
+    console.error(err);
+    showToast('Erro ao salvar documento.');
+    btn.disabled = false;
+    btn.textContent = 'Adicionar';
+  }
+}
+function confirmRemoveDocumento(id, titulo){
+  openModal(`
+    <h3>Excluir "${titulo}"?</h3>
+    <p style="font-size:13px; color:var(--ink-soft); line-height:1.5;">Remove o documento (e o arquivo anexado, se houver). Não é possível desfazer.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn danger" onclick="closeModal(); removeDocumento('${id}');">Excluir</button>
+    </div>
+  `);
 }
 async function removeDocumento(id){
   const o = state.currentObra;
+  const doc = (o.documentos||[]).find(d=>d.id===id);
   const { error } = await sb.from('documentos').delete().eq('id', id);
   if(error){ console.error(error); showToast('Erro ao remover documento.'); return; }
+  if(doc && doc.arquivoPath) await removeArquivo(doc.arquivoPath);
   state.currentObra = await loadObra(o.id);
+  showToast('Documento removido.');
   renderTabDocumentos(document.getElementById('tabContent'), state.currentObra);
+}
+
+/* ---- Tab: Fotos ---- */
+function renderTabFotos(wrap, o){
+  const fotos = o.fotos || [];
+  wrap.innerHTML = `
+    <div class="panel">
+      <h3>Nova Foto</h3>
+      <div class="field-grid">
+        <div class="field"><label>Foto</label><input type="file" id="foto_arquivo" accept="image/*"></div>
+        <div class="field wide"><label>Legenda (opcional)</label><input type="text" id="foto_legenda" placeholder="Ex: Fachada antes da reforma"></div>
+      </div>
+      <button class="btn primary" id="foto_btnAdd" onclick="addFoto()">Adicionar Foto</button>
+    </div>
+    <div class="panel">
+      <h3>Fotos da Obra (${fotos.length})</h3>
+      ${fotos.length ? `<div class="photo-grid">
+        ${fotos.map(f=>`
+          <div class="photo-thumb">
+            <img src="${arquivoUrl(f.storagePath)}" alt="${escapeHtml(f.legenda||'Foto')}" onclick="openPhotoModal('${f.storagePath}', '${escapeHtml(f.legenda||'Foto').replace(/'/g,"\\'")}')">
+            <button class="rm" onclick="confirmRemoveFoto('${f.id}')">✕</button>
+            ${f.legenda ? `<div class="cap">${escapeHtml(f.legenda)}</div>` : ''}
+          </div>
+        `).join('')}
+      </div>` : '<div class="empty-side">Nenhuma foto anexada ainda.</div>'}
+    </div>
+  `;
+}
+async function addFoto(){
+  const file = document.getElementById('foto_arquivo').files[0];
+  if(!file){ showToast('Selecione uma foto.'); return; }
+  const o = state.currentObra;
+  const btn = document.getElementById('foto_btnAdd');
+  btn.disabled = true; btn.textContent = 'Enviando…';
+  try{
+    const path = await uploadArquivo(file, `fotos/${o.id}`);
+    const { error } = await sb.from('fotos').insert({
+      obra_id: o.id, storage_path: path,
+      legenda: document.getElementById('foto_legenda').value.trim() || null
+    });
+    if(error) throw error;
+    state.currentObra = await loadObra(o.id);
+    showToast('Foto adicionada.');
+    renderTabFotos(document.getElementById('tabContent'), state.currentObra);
+  }catch(err){
+    console.error(err);
+    showToast('Erro ao enviar foto.');
+    btn.disabled = false; btn.textContent = 'Adicionar Foto';
+  }
+}
+function confirmRemoveFoto(id){
+  openModal(`
+    <h3>Excluir foto?</h3>
+    <p style="font-size:13px; color:var(--ink-soft); line-height:1.5;">Não é possível desfazer.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn danger" onclick="closeModal(); removeFoto('${id}');">Excluir</button>
+    </div>
+  `);
+}
+async function removeFoto(id){
+  const o = state.currentObra;
+  const foto = (o.fotos||[]).find(f=>f.id===id);
+  const { error } = await sb.from('fotos').delete().eq('id', id);
+  if(error){ console.error(error); showToast('Erro ao remover foto.'); return; }
+  if(foto) await removeArquivo(foto.storagePath);
+  state.currentObra = await loadObra(o.id);
+  showToast('Foto removida.');
+  renderTabFotos(document.getElementById('tabContent'), state.currentObra);
 }
 
 /* ---- Tab: Atualizações ---- */
