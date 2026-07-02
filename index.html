@@ -307,6 +307,19 @@ tbody tr:hover{ background: rgba(44,74,110,0.05); }
 }
 .file-link{ font-size:12.5px; font-weight:600; }
 
+.obra-summary-list{ display:flex; flex-direction:column; gap:10px; }
+.obra-summary-card{ border:1px solid var(--line); border-radius: var(--radius); background: rgba(255,255,255,0.4); overflow:hidden; }
+.osc-head{ display:flex; align-items:center; justify-content:space-between; padding:12px 14px; cursor:pointer; gap:12px; }
+.osc-head:hover{ background: rgba(44,74,110,0.05); }
+.osc-title strong{ font-size:14px; }
+.osc-title .addr{ font-size:11.5px; color:var(--ink-soft); margin-top:2px; }
+.osc-chevron{ color:var(--ink-soft); font-size:12px; transition: transform .15s; }
+.osc-details{ display:none; padding: 0 14px 14px; border-top:1px solid var(--line); }
+.osc-details.open{ display:block; padding-top:14px; }
+.osc-metrics{ display:grid; grid-template-columns: repeat(auto-fit,minmax(120px,1fr)); gap:12px; }
+.osc-metrics .label{ font-size:10.5px; text-transform:uppercase; letter-spacing:0.6px; color:var(--ink-soft); margin-bottom:4px; }
+.osc-metrics .num{ font-family:'JetBrains Mono', monospace; font-size:14px; }
+
 @media (max-width: 860px){
   .body{ flex-direction:column; }
   .sidebar{ width:100%; border-right:none; border-bottom: 1.5px solid var(--ink); max-height: 260px; }
@@ -547,30 +560,40 @@ async function goDashboard(){
   const ativasList = obras.filter(o=>o.status!=='vendido');
   const concluidasList = obras.filter(o=>o.status==='vendido');
 
-  function tableRows(list){
-    return list.map(o=>`
-      <tr onclick="openObra('${o.id}')" data-nome="${escapeHtml((o.nome+' '+(o.endereco||'')).toLowerCase())}">
-        <td><strong>${escapeHtml(o.nome)}</strong><br><span style="color:var(--ink-soft);font-size:11.5px;">${escapeHtml(o.endereco||'')}</span></td>
-        <td><span class="stamp ${STATUS_CLASS[o.status]}">${STATUS_LABELS[o.status]}</span></td>
-        <td class="num">${fmtMoney(o.valorCompra)}</td>
-        <td class="num">${fmtMoney(totalDespesas(o))}</td>
-        <td class="num">${fmtMoney(valorVendaEfetivo(o))}${o.valorVendaReal? '' : ' (est.)'}</td>
-        <td class="num" style="font-weight:700; color:${lucroObra(o)>=0?'var(--green)':'var(--red)'}">${fmtMoney(lucroObra(o))}</td>
-      </tr>
-    `).join('');
+  function summaryCard(o){
+    const lucro = lucroObra(o);
+    return `
+      <div class="obra-summary-card" data-nome="${escapeHtml((o.nome+' '+(o.endereco||'')).toLowerCase())}">
+        <div class="osc-head" onclick="toggleObraSummary('${o.id}')">
+          <div class="osc-title">
+            <strong>${escapeHtml(o.nome)}</strong>
+            <div class="addr">${escapeHtml(o.endereco||'')}</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:10px;">
+            <span class="stamp ${STATUS_CLASS[o.status]}">${STATUS_LABELS[o.status]}</span>
+            <span class="osc-chevron" id="oscChevron-${o.id}">▾</span>
+          </div>
+        </div>
+        <div class="osc-details" id="oscDetails-${o.id}">
+          <div class="osc-metrics">
+            <div><div class="label">Compra</div><div class="num">${fmtMoney(o.valorCompra)}</div></div>
+            <div><div class="label">Gasto Reforma</div><div class="num">${fmtMoney(totalDespesas(o))}</div></div>
+            <div><div class="label">Venda (est./real)</div><div class="num">${fmtMoney(valorVendaEfetivo(o))}${o.valorVendaReal? '' : ' (est.)'}</div></div>
+            <div><div class="label">Lucro</div><div class="num" style="font-weight:700; color:${lucro>=0?'var(--green)':'var(--red)'}">${fmtMoney(lucro)}</div></div>
+          </div>
+          <div class="modal-actions" style="justify-content:space-between; margin-top:14px;">
+            <button class="btn small ghost" onclick="event.stopPropagation(); toggleObraSummary('${o.id}', true)">Fechar detalhes</button>
+            <button class="btn small primary" onclick="event.stopPropagation(); openObra('${o.id}')">Abrir Obra Completa</button>
+          </div>
+        </div>
+      </div>
+    `;
   }
-  function tableBlock(title, list){
+  function cardsBlock(title, list){
     if(!list.length) return '';
     return `
       <h3 style="font-size:13px; text-transform:uppercase; letter-spacing:0.8px; color:var(--ink-soft); margin: 22px 0 10px;">${title} (${list.length})</h3>
-      <div class="obras-table-wrap resumo-table">
-        <table>
-          <thead><tr>
-            <th>Obra</th><th>Status</th><th>Compra</th><th>Gasto Reforma</th><th>Venda (est./real)</th><th>Lucro</th>
-          </tr></thead>
-          <tbody>${tableRows(list)}</tbody>
-        </table>
-      </div>
+      <div class="obra-summary-list">${list.map(summaryCard).join('')}</div>
     `;
   }
 
@@ -606,8 +629,8 @@ async function goDashboard(){
         style="padding:8px 10px; border:1px solid var(--line-strong); border-radius:var(--radius); background:rgba(255,255,255,0.6); font-size:13px; min-width:240px;">
     </div>
     <div id="resumoTabelas">
-      ${tableBlock('Obras Ativas / Em Andamento', ativasList)}
-      ${tableBlock('Concluídas / Vendidas', concluidasList)}
+      ${cardsBlock('Obras Ativas / Em Andamento', ativasList)}
+      ${cardsBlock('Concluídas / Vendidas', concluidasList)}
     </div>
     ` : `
     <div class="empty">
@@ -619,9 +642,17 @@ async function goDashboard(){
 }
 function filtrarResumo(termo){
   const q = termo.trim().toLowerCase();
-  document.querySelectorAll('#resumoTabelas tbody tr').forEach(tr=>{
-    tr.style.display = !q || (tr.dataset.nome||'').includes(q) ? '' : 'none';
+  document.querySelectorAll('#resumoTabelas .obra-summary-card').forEach(card=>{
+    card.style.display = !q || (card.dataset.nome||'').includes(q) ? '' : 'none';
   });
+}
+function toggleObraSummary(id, forceClose){
+  const el = document.getElementById('oscDetails-'+id);
+  const chevron = document.getElementById('oscChevron-'+id);
+  if(!el) return;
+  const shouldOpen = forceClose ? false : !el.classList.contains('open');
+  el.classList.toggle('open', shouldOpen);
+  if(chevron) chevron.textContent = shouldOpen ? '▴' : '▾';
 }
 
 /* ---------------- Obra detail ---------------- */
