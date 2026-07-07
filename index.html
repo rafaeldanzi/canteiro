@@ -340,6 +340,7 @@ tbody tr:hover{ background: rgba(44,74,110,0.05); }
   <div class="body">
     <div class="sidebar">
       <button class="dash-link active" id="dashLinkBtn" onclick="goDashboard()">▦ Visão Geral</button>
+      <button class="dash-link" id="fundoLinkBtn" onclick="goFundo()">💰 Fundo de Investimento</button>
       <button class="new-obra-btn" onclick="openObraModal()">+ Nova Obra</button>
       <h2>Obras</h2>
       <div id="obraList"><div class="empty-side">Carregando…</div></div>
@@ -405,8 +406,9 @@ const ETAPA_STATUS = { pendente:'Pendente', andamento:'Em Andamento', concluido:
 let state = {
   obrasIndex: [],   // [{id, nome, status}]
   allSocios: [],    // registro global de sócios
+  fundoAportes: [], // aportes do Fundo de Investimento (global, não ligado a obra)
   currentObra: null, // full obra object currently loaded
-  currentView: 'dashboard', // 'dashboard' | 'obra'
+  currentView: 'dashboard', // 'dashboard' | 'obra' | 'fundo'
   currentTab: 'geral',
   loaded: false
 };
@@ -482,7 +484,7 @@ async function loadObra(id){
     dataVenda: o.data_venda || '', notas: o.notas || '',
     margemLucroAlvo: o.margem_lucro_alvo ?? '', corretorNome: o.corretor_nome || '',
     comissaoCorretorPercentual: o.comissao_corretor_percentual ?? '',
-    despesas: (despesasRes.data||[]).map(d=>({ id:d.id, categoria:d.categoria, descricao:d.descricao, valor:d.valor, data:d.data })),
+    despesas: (despesasRes.data||[]).map(d=>({ id:d.id, categoria:d.categoria, descricao:d.descricao, valor:d.valor, data:d.data, socioId:d.socio_id, notaFiscalPath:d.nota_fiscal_path, notaFiscalNome:d.nota_fiscal_nome })),
     etapas: (etapasRes.data||[]).map(e=>({ id:e.id, nome:e.nome, inicio:e.inicio, fim:e.fim, status:e.status, fotoPath:e.foto_path, fotoNome:e.foto_nome })),
     documentos: (docsRes.data||[]).map(d=>({ id:d.id, titulo:d.titulo, link:d.link, nota:d.nota, arquivoPath:d.arquivo_path, arquivoNome:d.arquivo_nome, arquivoTipo:d.arquivo_tipo })),
     atualizacoes: (atualizRes.data||[]).map(a=>({ id:a.id, texto:a.texto, data:a.data })),
@@ -538,6 +540,7 @@ async function goDashboard(){
   state.currentView='dashboard';
   state.currentObra=null;
   document.getElementById('dashLinkBtn').classList.add('active');
+  document.getElementById('fundoLinkBtn').classList.remove('active');
   renderSidebar();
   const main = document.getElementById('main');
   main.innerHTML = '<div class="loading-screen">Calculando totais…</div>';
@@ -655,6 +658,135 @@ function toggleObraSummary(id, forceClose){
   if(chevron) chevron.textContent = shouldOpen ? '▴' : '▾';
 }
 
+/* ---------------- Fundo de Investimento (global) ---------------- */
+async function loadFundoAportes(){
+  const { data, error } = await sb.from('fundo_aportes').select('id, socio_id, valor, data, descricao, socios(id, nome)').order('data', { ascending:false });
+  if(error){ console.error(error); showToast('Erro ao carregar o Fundo de Investimento.'); state.fundoAportes = []; return; }
+  state.fundoAportes = data.map(a=>({ id:a.id, socioId:a.socio_id, nome: a.socios ? a.socios.nome : '(sócio removido)', valor:a.valor, data:a.data, descricao:a.descricao }));
+}
+async function goFundo(){
+  state.currentView = 'fundo';
+  state.currentObra = null;
+  document.getElementById('dashLinkBtn').classList.remove('active');
+  document.getElementById('fundoLinkBtn').classList.add('active');
+  renderSidebar();
+  const main = document.getElementById('main');
+  main.innerHTML = '<div class="loading-screen">Carregando Fundo de Investimento…</div>';
+  await loadFundoAportes();
+  renderFundo();
+}
+function renderFundo(){
+  const main = document.getElementById('main');
+  const aportes = state.fundoAportes || [];
+  const total = aportes.reduce((s,a)=> s + (Number(a.valor)||0), 0) || 0;
+  const porSocio = {};
+  aportes.forEach(a=>{
+    const chave = a.socioId || a.nome;
+    if(!porSocio[chave]) porSocio[chave] = { nome:a.nome, valor:0 };
+    porSocio[chave].valor += Number(a.valor)||0;
+  });
+  const resumo = Object.values(porSocio).sort((a,b)=>b.valor-a.valor);
+  main.innerHTML = `
+    <h1 class="section-title">Fundo de Investimento</h1>
+    <p class="section-sub">Caixa comum: cada sócio transfere um valor para a conta corrente central e o % de participação no fundo é calculado com base no total aportado por cada um. Não é ligado a nenhuma obra específica.</p>
+
+    <div class="cards-row">
+      <div class="card"><div class="label">Total no Fundo</div><div class="value num">${fmtMoney(total)}</div></div>
+    </div>
+
+    <div class="panel">
+      <h3>Novo Aporte</h3>
+      <div class="field-grid">
+        <div class="field">
+          <label>Sócio</label>
+          <select id="fa_socio" onchange="document.getElementById('fa_novoWrap').style.display = this.value==='__novo__' ? 'flex' : 'none';">
+            <option value="">Selecione…</option>
+            ${state.allSocios.map(s=>`<option value="${s.id}">${escapeHtml(s.nome)}</option>`).join('')}
+            <option value="__novo__">+ Novo sócio</option>
+          </select>
+        </div>
+        <div class="field" id="fa_novoWrap" style="display:none;">
+          <label>Nome do Novo Sócio</label><input type="text" id="fa_novoNome">
+        </div>
+        <div class="field"><label>Valor (R$)</label><input type="text" inputmode="decimal" id="fa_valor" oninput="moneyMaskInput(this)"></div>
+        <div class="field"><label>Data</label><input type="date" id="fa_data" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="field wide"><label>Descrição (opcional)</label><input type="text" id="fa_descricao" placeholder="Ex: Transferência para conta central"></div>
+      </div>
+      <button class="btn primary" onclick="addFundoAporte()">Adicionar Aporte</button>
+    </div>
+
+    <div class="panel">
+      <h3>Participação no Fundo</h3>
+      ${resumo.length ? resumo.map(r=>`
+        <div class="list-row">
+          <div class="main-txt">${escapeHtml(r.nome)}</div>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <div class="sub-txt">${total>0 ? (r.valor/total*100).toFixed(1) : '0.0'}%</div>
+            <div class="amount">${fmtMoney(r.valor)}</div>
+          </div>
+        </div>
+      `).join('') : '<div class="empty-side">Nenhum aporte registrado ainda.</div>'}
+    </div>
+
+    <div class="panel">
+      <h3>Histórico de Aportes</h3>
+      ${aportes.length ? aportes.map(a=>`
+        <div class="list-row">
+          <div>
+            <div class="main-txt">${escapeHtml(a.nome)}</div>
+            <div class="sub-txt">${fmtDate(a.data)}${a.descricao ? ' · '+escapeHtml(a.descricao) : ''}</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <div class="amount">${fmtMoney(a.valor)}</div>
+            <div class="row-actions"><button class="icon-btn" onclick="confirmRemoveFundoAporte('${a.id}')">✕</button></div>
+          </div>
+        </div>
+      `).join('') : '<div class="empty-side">Nenhum aporte registrado ainda.</div>'}
+    </div>
+  `;
+}
+async function addFundoAporte(){
+  const sel = document.getElementById('fa_socio').value;
+  const valor = money2num(document.getElementById('fa_valor').value);
+  if(!sel){ showToast('Selecione um sócio.'); return; }
+  if(!valor || valor<=0){ showToast('Informe um valor válido.'); return; }
+  let socioId = sel;
+  if(sel === '__novo__'){
+    const novoNome = document.getElementById('fa_novoNome').value.trim();
+    if(!novoNome){ showToast('Informe o nome do novo sócio.'); return; }
+    const { data, error } = await sb.from('socios').insert({ nome: novoNome }).select().single();
+    if(error){ console.error(error); showToast('Erro ao criar sócio.'); return; }
+    socioId = data.id;
+    await loadAllSocios();
+  }
+  const { data: row, error } = await sb.from('fundo_aportes').insert({
+    socio_id: socioId, valor: Number(valor),
+    data: document.getElementById('fa_data').value || null,
+    descricao: document.getElementById('fa_descricao').value.trim() || null
+  }).select('id, socio_id, valor, data, descricao, socios(id, nome)').single();
+  if(error){ console.error(error); showToast('Erro ao registrar aporte.'); return; }
+  state.fundoAportes.unshift({ id:row.id, socioId:row.socio_id, nome: row.socios ? row.socios.nome : '(sócio removido)', valor:row.valor, data:row.data, descricao:row.descricao });
+  showToast('Aporte registrado.');
+  renderFundo();
+}
+function confirmRemoveFundoAporte(id){
+  openModal(`
+    <h3>Excluir aporte?</h3>
+    <p style="font-size:13px; color:var(--ink-soft); line-height:1.5;">Remove este aporte do Fundo de Investimento. Não é possível desfazer.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn danger" onclick="closeModal(); removeFundoAporte('${id}');">Excluir</button>
+    </div>
+  `);
+}
+async function removeFundoAporte(id){
+  const { error } = await sb.from('fundo_aportes').delete().eq('id', id);
+  if(error){ console.error(error); showToast('Erro ao remover aporte.'); return; }
+  state.fundoAportes = (state.fundoAportes||[]).filter(a=>a.id!==id);
+  showToast('Aporte removido.');
+  renderFundo();
+}
+
 /* ---------------- Obra detail ---------------- */
 async function openObra(id){
   const obra = await loadObra(id);
@@ -663,6 +795,7 @@ async function openObra(id){
   state.currentView='obra';
   state.currentTab='geral';
   document.getElementById('dashLinkBtn').classList.remove('active');
+  document.getElementById('fundoLinkBtn').classList.remove('active');
   renderSidebar();
   renderObra();
 }
@@ -692,7 +825,6 @@ function renderObra(){
       <button class="tab-btn ${state.currentTab==='socios'?'active':''}" onclick="setTab('socios')">Sócios &amp; Lucro</button>
       <button class="tab-btn ${state.currentTab==='documentos'?'active':''}" onclick="setTab('documentos')">Documentos</button>
       <button class="tab-btn ${state.currentTab==='fotos'?'active':''}" onclick="setTab('fotos')">Fotos</button>
-      <button class="tab-btn ${state.currentTab==='atualizacoes'?'active':''}" onclick="setTab('atualizacoes')">Atualizações</button>
     </div>
 
     <div id="tabContent"></div>
@@ -711,7 +843,6 @@ function renderTab(){
   if(state.currentTab==='socios') return renderTabSocios(wrap, o);
   if(state.currentTab==='documentos') return renderTabDocumentos(wrap, o);
   if(state.currentTab==='fotos') return renderTabFotos(wrap, o);
-  if(state.currentTab==='atualizacoes') return renderTabAtualizacoes(wrap, o);
 }
 
 /* ---- Tab: Visão Geral ---- */
@@ -760,15 +891,28 @@ async function saveGeral(){
   };
   const { error } = await sb.from('obras').update(payload).eq('id', o.id);
   if(error){ console.error(error); showToast('Erro ao salvar.'); return; }
-  state.currentObra = await loadObra(o.id);
+  Object.assign(o, {
+    dataCompra: payload.data_compra || '', valorCompra: payload.valor_compra ?? '',
+    valorVendaEstimado: payload.valor_venda_estimado ?? '', valorVendaReal: payload.valor_venda_real ?? '',
+    dataVenda: payload.data_venda || '', notas: payload.notas || '',
+    corretorNome: payload.corretor_nome || '', comissaoCorretorPercentual: payload.comissao_corretor_percentual ?? '',
+    margemLucroAlvo: payload.margem_lucro_alvo ?? ''
+  });
   showToast('Dados salvos.');
-  renderTabGeral(document.getElementById('tabContent'), state.currentObra);
+  renderTabGeral(document.getElementById('tabContent'), o);
 }
 
 /* ---- Tab: Orçamento ---- */
+let pendingNotaFiscal = null;
+function socioNome(o, socioId){
+  const s = (o.socios||[]).find(x=>x.socioId===socioId);
+  return s ? s.nome : '(sócio removido)';
+}
 function renderTabOrcamento(wrap, o){
   const despesas = o.despesas || [];
   const total = totalDespesas(o);
+  const socios = o.socios || [];
+  pendingNotaFiscal = null;
   wrap.innerHTML = `
     <div class="panel">
       <h3>Nova Despesa</h3>
@@ -782,8 +926,16 @@ function renderTabOrcamento(wrap, o){
         <div class="field"><label>Descrição</label><input type="text" id="d_descricao" placeholder="Ex: Tinta e pintura"></div>
         <div class="field"><label>Valor (R$)</label><input type="text" inputmode="decimal" id="d_valor" oninput="moneyMaskInput(this)"></div>
         <div class="field"><label>Data</label><input type="date" id="d_data"></div>
+        <div class="field"><label>Pago por</label>
+          <select id="d_socio">
+            <option value="">Dividir igualmente entre os sócios</option>
+            ${socios.map(s=>`<option value="${s.socioId}">${escapeHtml(s.nome)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field"><label>Nota Fiscal (opcional, foto)</label><input type="file" id="d_notaArquivo" accept="image/*" onchange="handleNotaFiscalUpload(this)"></div>
       </div>
-      <button class="btn primary" onclick="addDespesa()">Adicionar Despesa</button>
+      <div id="d_notaStatus" class="sub-txt" style="margin-bottom:10px;"></div>
+      <button class="btn primary" id="d_btnAdd" onclick="addDespesa()">Adicionar Despesa</button>
     </div>
     <div class="panel">
       <h3>Despesas Lançadas — Total: <span class="num" style="color:var(--ink)">${fmtMoney(total)}</span></h3>
@@ -791,7 +943,7 @@ function renderTabOrcamento(wrap, o){
         <div class="list-row">
           <div>
             <div class="main-txt">${escapeHtml(d.descricao||d.categoria)}</div>
-            <div class="sub-txt">${escapeHtml(d.categoria)} · ${fmtDate(d.data)}</div>
+            <div class="sub-txt">${escapeHtml(d.categoria)} · ${fmtDate(d.data)} · ${d.socioId ? 'Pago por '+escapeHtml(socioNome(o,d.socioId)) : 'Dividido igualmente'}${d.notaFiscalPath ? ` · <a href="javascript:void(0)" onclick="openPhotoModal('${d.notaFiscalPath}', 'Nota Fiscal')">📎 Nota Fiscal</a>` : ''}</div>
           </div>
           <div style="display:flex; align-items:center; gap:12px;">
             <div class="amount">${fmtMoney(d.valor)}</div>
@@ -802,22 +954,62 @@ function renderTabOrcamento(wrap, o){
     </div>
   `;
 }
+async function handleNotaFiscalUpload(inputEl){
+  const file = inputEl.files[0];
+  if(!file) return;
+  const o = state.currentObra;
+  const statusEl = document.getElementById('d_notaStatus');
+  statusEl.textContent = 'Enviando nota fiscal…';
+  try{
+    const path = await uploadArquivo(file, `notas-fiscais/${o.id}`);
+    pendingNotaFiscal = { path, nome: file.name };
+    statusEl.textContent = 'Nota enviada. Interpretando com IA…';
+    const interpretado = await interpretarNotaFiscal(path);
+    if(interpretado && interpretado.ok){
+      if(interpretado.categoria) document.getElementById('d_categoria').value = interpretado.categoria;
+      if(interpretado.descricao) document.getElementById('d_descricao').value = interpretado.descricao;
+      if(interpretado.valor) document.getElementById('d_valor').value = fmtMoney(interpretado.valor);
+      if(interpretado.data) document.getElementById('d_data').value = interpretado.data;
+      statusEl.textContent = '✓ Nota interpretada automaticamente — revise os campos antes de salvar.';
+    } else {
+      statusEl.textContent = 'Não foi possível interpretar automaticamente — preencha os campos manualmente. A foto da nota será anexada.';
+    }
+  }catch(err){
+    console.error(err);
+    statusEl.textContent = 'Erro ao enviar a nota fiscal.';
+    pendingNotaFiscal = null;
+  }
+}
+async function interpretarNotaFiscal(path){
+  try{
+    const { data, error } = await sb.functions.invoke('interpretar-nota', { body: { imageUrl: arquivoUrl(path) } });
+    if(error) throw error;
+    return data;
+  }catch(err){
+    console.error(err);
+    return { ok:false };
+  }
+}
 async function addDespesa(){
   const descricao = document.getElementById('d_descricao').value.trim();
   const valor = money2num(document.getElementById('d_valor').value);
   if(!valor || valor<=0){ showToast('Informe um valor válido.'); return; }
   const o = state.currentObra;
-  const { error } = await sb.from('despesas').insert({
+  const { data, error } = await sb.from('despesas').insert({
     obra_id: o.id,
     categoria: document.getElementById('d_categoria').value,
     descricao,
     valor: Number(valor),
-    data: document.getElementById('d_data').value || null
-  });
+    data: document.getElementById('d_data').value || null,
+    socio_id: document.getElementById('d_socio').value || null,
+    nota_fiscal_path: pendingNotaFiscal ? pendingNotaFiscal.path : null,
+    nota_fiscal_nome: pendingNotaFiscal ? pendingNotaFiscal.nome : null
+  }).select().single();
   if(error){ console.error(error); showToast('Erro ao salvar despesa.'); return; }
-  state.currentObra = await loadObra(o.id);
+  o.despesas.push({ id:data.id, categoria:data.categoria, descricao:data.descricao, valor:data.valor, data:data.data, socioId:data.socio_id, notaFiscalPath:data.nota_fiscal_path, notaFiscalNome:data.nota_fiscal_nome });
+  pendingNotaFiscal = null;
   showToast('Despesa adicionada.');
-  renderTabOrcamento(document.getElementById('tabContent'), state.currentObra);
+  renderTabOrcamento(document.getElementById('tabContent'), o);
 }
 function confirmRemoveDespesa(id, label){
   openModal(`
@@ -833,14 +1025,15 @@ async function removeDespesa(id){
   const o = state.currentObra;
   const { error } = await sb.from('despesas').delete().eq('id', id);
   if(error){ console.error(error); showToast('Erro ao remover despesa.'); return; }
-  state.currentObra = await loadObra(o.id);
+  o.despesas = (o.despesas||[]).filter(d=>d.id!==id);
   showToast('Despesa removida.');
-  renderTabOrcamento(document.getElementById('tabContent'), state.currentObra);
+  renderTabOrcamento(document.getElementById('tabContent'), o);
 }
 
-/* ---- Tab: Cronograma ---- */
+/* ---- Tab: Cronograma (inclui Notas/Atualizações) ---- */
 function renderTabCronograma(wrap, o){
   const etapas = o.etapas || [];
+  const atualizacoes = o.atualizacoes || [];
   wrap.innerHTML = `
     <div class="panel">
       <h3>Nova Etapa</h3>
@@ -864,11 +1057,14 @@ function renderTabCronograma(wrap, o){
           <div class="tl-item ${e.status}">
             <div class="tl-header">
               <span class="tl-title">${escapeHtml(e.nome)}</span>
-              <span class="pill ${e.status}">${ETAPA_STATUS[e.status]}</span>
+              <select class="status-select" style="padding:4px 8px; font-size:12px;" onchange="setEtapaStatus('${e.id}', this.value)">
+                <option value="pendente" ${e.status==='pendente'?'selected':''}>Pendente</option>
+                <option value="andamento" ${e.status==='andamento'?'selected':''}>Em Andamento</option>
+                <option value="concluido" ${e.status==='concluido'?'selected':''}>Concluído</option>
+              </select>
             </div>
             <div class="tl-dates">${fmtDate(e.inicio)} → ${fmtDate(e.fim)}</div>
             <div class="row-actions" style="margin-top:6px;">
-              <button class="btn small" onclick="cycleEtapaStatus('${e.id}')">Avançar status</button>
               ${e.fotoPath
                 ? `<button class="btn small" onclick="openPhotoModal('${e.fotoPath}', '${escapeHtml(e.nome).replace(/'/g,"\\'")}')">📷 Ver foto</button>`
                 : `<button class="btn small ghost" onclick="attachEtapaFotoModal('${e.id}')">📷 Anexar foto</button>`}
@@ -877,6 +1073,29 @@ function renderTabCronograma(wrap, o){
           </div>
         `).join('')}
       </div>` : '<div class="empty-side">Nenhuma etapa cadastrada ainda.</div>'}
+    </div>
+    <div class="panel">
+      <h3>Nova Nota / Atualização</h3>
+      <div class="field-grid">
+        <div class="field wide"><label>Texto</label><textarea id="a_texto" rows="2" placeholder="Ex: Reforma do telhado concluída"></textarea></div>
+        <div class="field"><label>Data</label><input type="date" id="a_data" value="${new Date().toISOString().slice(0,10)}"></div>
+      </div>
+      <button class="btn primary" onclick="addAtualizacao()">Adicionar</button>
+    </div>
+    <div class="panel">
+      <h3>Notas / Atualizações</h3>
+      ${atualizacoes.length ? atualizacoes.map(a=>`
+        <div class="list-row">
+          <div>
+            <div class="main-txt">${escapeHtml(a.texto)}</div>
+            <div class="sub-txt">${fmtDate(a.data)}</div>
+          </div>
+          <div class="row-actions">
+            <button class="icon-btn" onclick="editAtualizacaoModal('${a.id}')" title="Editar">✎</button>
+            <button class="icon-btn" onclick="removeAtualizacao('${a.id}')">✕</button>
+          </div>
+        </div>
+      `).join('') : '<div class="empty-side">Nenhuma atualização registrada ainda.</div>'}
     </div>
   `;
 }
@@ -894,17 +1113,17 @@ async function addEtapa(){
       fotoPath = await uploadArquivo(file, `etapas/${o.id}`);
       fotoNome = file.name;
     }
-    const { error } = await sb.from('etapas').insert({
+    const { data, error } = await sb.from('etapas').insert({
       obra_id: o.id, nome,
       inicio: document.getElementById('e_inicio').value || null,
       fim: document.getElementById('e_fim').value || null,
       status: document.getElementById('e_status').value,
       foto_path: fotoPath, foto_nome: fotoNome
-    });
+    }).select().single();
     if(error) throw error;
-    state.currentObra = await loadObra(o.id);
+    o.etapas.push({ id:data.id, nome:data.nome, inicio:data.inicio, fim:data.fim, status:data.status, fotoPath:data.foto_path, fotoNome:data.foto_nome });
     showToast('Etapa adicionada.');
-    renderTabCronograma(document.getElementById('tabContent'), state.currentObra);
+    renderTabCronograma(document.getElementById('tabContent'), o);
   }catch(err){
     console.error(err);
     showToast('Erro ao salvar etapa.');
@@ -935,26 +1154,26 @@ async function saveEtapaFoto(id){
     const path = await uploadArquivo(file, `etapas/${o.id}`);
     const { error } = await sb.from('etapas').update({ foto_path: path, foto_nome: file.name }).eq('id', id);
     if(error) throw error;
-    state.currentObra = await loadObra(o.id);
+    const et = (o.etapas||[]).find(e=>e.id===id);
+    if(et){ et.fotoPath = path; et.fotoNome = file.name; }
     closeModal();
     showToast('Foto anexada à etapa.');
-    renderTabCronograma(document.getElementById('tabContent'), state.currentObra);
+    renderTabCronograma(document.getElementById('tabContent'), o);
   }catch(err){
     console.error(err);
     showToast('Erro ao anexar foto.');
     btn.disabled = false; btn.textContent = 'Salvar';
   }
 }
-async function cycleEtapaStatus(id){
-  const order = ['pendente','andamento','concluido'];
+async function setEtapaStatus(id, novoStatus){
   const o = state.currentObra;
   const et = (o.etapas||[]).find(e=>e.id===id);
   if(!et) return;
-  const novo = order[(order.indexOf(et.status)+1) % order.length];
-  const { error } = await sb.from('etapas').update({ status: novo }).eq('id', id);
-  if(error){ console.error(error); showToast('Erro ao atualizar etapa.'); return; }
-  state.currentObra = await loadObra(o.id);
-  renderTabCronograma(document.getElementById('tabContent'), state.currentObra);
+  const anterior = et.status;
+  et.status = novoStatus;
+  const { error } = await sb.from('etapas').update({ status: novoStatus }).eq('id', id);
+  if(error){ console.error(error); showToast('Erro ao atualizar etapa.'); et.status = anterior; renderTabCronograma(document.getElementById('tabContent'), o); return; }
+  showToast('Status da etapa atualizado.');
 }
 function confirmRemoveEtapa(id, nome){
   openModal(`
@@ -970,18 +1189,82 @@ async function removeEtapa(id){
   const o = state.currentObra;
   const { error } = await sb.from('etapas').delete().eq('id', id);
   if(error){ console.error(error); showToast('Erro ao remover etapa.'); return; }
-  state.currentObra = await loadObra(o.id);
+  o.etapas = (o.etapas||[]).filter(e=>e.id!==id);
   showToast('Etapa removida.');
-  renderTabCronograma(document.getElementById('tabContent'), state.currentObra);
+  renderTabCronograma(document.getElementById('tabContent'), o);
+}
+function editAtualizacaoModal(id){
+  const o = state.currentObra;
+  const a = (o.atualizacoes||[]).find(x=>x.id===id);
+  if(!a) return;
+  openModal(`
+    <h3>Editar Atualização</h3>
+    <div class="field" style="margin-bottom:12px;">
+      <label>Texto</label>
+      <textarea id="ea_texto" rows="3">${escapeHtml(a.texto)}</textarea>
+    </div>
+    <div class="field" style="margin-bottom:12px;">
+      <label>Data</label>
+      <input type="date" id="ea_data" value="${a.data||''}">
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn primary" onclick="saveEditAtualizacao('${id}')">Salvar</button>
+    </div>
+  `);
+}
+async function saveEditAtualizacao(id){
+  const texto = document.getElementById('ea_texto').value.trim();
+  if(!texto){ showToast('Escreva o texto da atualização.'); return; }
+  const o = state.currentObra;
+  const data = document.getElementById('ea_data').value || null;
+  const { error } = await sb.from('atualizacoes').update({ texto, data }).eq('id', id);
+  if(error){ console.error(error); showToast('Erro ao salvar atualização.'); return; }
+  const a = (o.atualizacoes||[]).find(x=>x.id===id);
+  if(a){ a.texto = texto; a.data = data; }
+  closeModal();
+  showToast('Atualização editada.');
+  renderTabCronograma(document.getElementById('tabContent'), o);
+}
+async function addAtualizacao(){
+  const texto = document.getElementById('a_texto').value.trim();
+  if(!texto){ showToast('Escreva o texto da atualização.'); return; }
+  const o = state.currentObra;
+  const data = document.getElementById('a_data').value || null;
+  const { data: row, error } = await sb.from('atualizacoes').insert({ obra_id: o.id, texto, data }).select().single();
+  if(error){ console.error(error); showToast('Erro ao salvar atualização.'); return; }
+  o.atualizacoes.unshift({ id:row.id, texto:row.texto, data:row.data });
+  showToast('Atualização adicionada.');
+  renderTabCronograma(document.getElementById('tabContent'), o);
+}
+async function removeAtualizacao(id){
+  const o = state.currentObra;
+  const { error } = await sb.from('atualizacoes').delete().eq('id', id);
+  if(error){ console.error(error); showToast('Erro ao remover.'); return; }
+  o.atualizacoes = (o.atualizacoes||[]).filter(a=>a.id!==id);
+  renderTabCronograma(document.getElementById('tabContent'), o);
 }
 
 /* ---- Tab: Sócios ---- */
+function despesasPorSocio(o){
+  const socios = o.socios || [];
+  const despesas = o.despesas || [];
+  if(!socios.length) return [];
+  const semSocio = despesas.filter(d=>!d.socioId).reduce((s,d)=>s+(Number(d.valor)||0),0);
+  const totalGeral = totalDespesas(o) || 1;
+  return socios.map(s=>{
+    const direto = despesas.filter(d=>d.socioId===s.socioId).reduce((sum,d)=>sum+(Number(d.valor)||0),0);
+    const valor = direto + (semSocio / socios.length);
+    return { nome: s.nome, valor, pct: valor/totalGeral*100 };
+  });
+}
 function renderTabSocios(wrap, o){
   const socios = o.socios || [];
   const totalPct = socios.reduce((s,x)=> s + (Number(x.percentual)||0), 0);
   const lucro = lucroObra(o);
   const jaAdicionados = new Set(socios.map(s=>s.socioId));
   const disponiveis = state.allSocios.filter(s=>!jaAdicionados.has(s.id));
+  const divisaoDespesas = despesasPorSocio(o);
   wrap.innerHTML = `
     <div class="panel">
       <h3>Adicionar Sócio a esta Obra</h3>
@@ -1017,6 +1300,19 @@ function renderTabSocios(wrap, o){
         </div>
       `).join('') : '<div class="empty-side">Nenhum sócio cadastrado para esta obra ainda.</div>'}
     </div>
+    <div class="panel">
+      <h3>Divisão de Despesas por Sócio</h3>
+      <p class="sub-txt" style="margin-bottom:10px;">Despesas sem sócio definido no lançamento são rateadas igualmente entre os sócios da obra.</p>
+      ${divisaoDespesas.length ? divisaoDespesas.map(d=>`
+        <div class="list-row">
+          <div class="main-txt">${escapeHtml(d.nome)}</div>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <div class="sub-txt">${d.pct.toFixed(1)}%</div>
+            <div class="amount">${fmtMoney(d.valor)}</div>
+          </div>
+        </div>
+      `).join('') : '<div class="empty-side">Adicione sócios para ver a divisão de despesas.</div>'}
+    </div>
   `;
 }
 async function addSocio(){
@@ -1025,29 +1321,32 @@ async function addSocio(){
   const percentual = document.getElementById('s_percentual').value || 0;
   const aporte = money2num(document.getElementById('s_aporte').value) || 0;
   if(!sel){ showToast('Selecione um sócio.'); return; }
-  let socioId = sel;
+  let socioId = sel, nome;
   if(sel === '__novo__'){
     const novoNome = document.getElementById('s_novoNome').value.trim();
     if(!novoNome){ showToast('Informe o nome do novo sócio.'); return; }
     const { data, error } = await sb.from('socios').insert({ nome: novoNome }).select().single();
     if(error){ console.error(error); showToast('Erro ao criar sócio.'); return; }
     socioId = data.id;
+    nome = data.nome;
     await loadAllSocios();
+  } else {
+    nome = (state.allSocios.find(s=>s.id===socioId)||{}).nome || '';
   }
-  const { error: perr } = await sb.from('participacoes').insert({
+  const { data: part, error: perr } = await sb.from('participacoes').insert({
     obra_id: o.id, socio_id: socioId, percentual: Number(percentual), aporte: Number(aporte)
-  });
+  }).select().single();
   if(perr){ console.error(perr); showToast('Erro ao adicionar sócio (talvez já esteja nesta obra).'); return; }
-  state.currentObra = await loadObra(o.id);
+  o.socios.push({ id:part.id, socioId:part.socio_id, nome, percentual:part.percentual, aporte:part.aporte });
   showToast('Sócio adicionado à obra.');
-  renderTabSocios(document.getElementById('tabContent'), state.currentObra);
+  renderTabSocios(document.getElementById('tabContent'), o);
 }
 async function removeSocio(id){
   const o = state.currentObra;
   const { error } = await sb.from('participacoes').delete().eq('id', id);
   if(error){ console.error(error); showToast('Erro ao remover sócio.'); return; }
-  state.currentObra = await loadObra(o.id);
-  renderTabSocios(document.getElementById('tabContent'), state.currentObra);
+  o.socios = (o.socios||[]).filter(s=>s.id!==id);
+  renderTabSocios(document.getElementById('tabContent'), o);
 }
 
 /* ---- Tab: Documentos ---- */
@@ -1100,16 +1399,16 @@ async function addDocumento(){
       arquivoNome = file.name;
       arquivoTipo = file.type || null;
     }
-    const { error } = await sb.from('documentos').insert({
+    const { data, error } = await sb.from('documentos').insert({
       obra_id: o.id, titulo,
       link: document.getElementById('doc_link').value.trim() || null,
       nota: document.getElementById('doc_nota').value.trim() || null,
       arquivo_path: arquivoPath, arquivo_nome: arquivoNome, arquivo_tipo: arquivoTipo
-    });
+    }).select().single();
     if(error) throw error;
-    state.currentObra = await loadObra(o.id);
+    o.documentos.push({ id:data.id, titulo:data.titulo, link:data.link, nota:data.nota, arquivoPath:data.arquivo_path, arquivoNome:data.arquivo_nome, arquivoTipo:data.arquivo_tipo });
     showToast('Documento adicionado.');
-    renderTabDocumentos(document.getElementById('tabContent'), state.currentObra);
+    renderTabDocumentos(document.getElementById('tabContent'), o);
   }catch(err){
     console.error(err);
     showToast('Erro ao salvar documento.');
@@ -1133,9 +1432,9 @@ async function removeDocumento(id){
   const { error } = await sb.from('documentos').delete().eq('id', id);
   if(error){ console.error(error); showToast('Erro ao remover documento.'); return; }
   if(doc && doc.arquivoPath) await removeArquivo(doc.arquivoPath);
-  state.currentObra = await loadObra(o.id);
+  o.documentos = (o.documentos||[]).filter(d=>d.id!==id);
   showToast('Documento removido.');
-  renderTabDocumentos(document.getElementById('tabContent'), state.currentObra);
+  renderTabDocumentos(document.getElementById('tabContent'), o);
 }
 
 /* ---- Tab: Fotos ---- */
@@ -1172,14 +1471,14 @@ async function addFoto(){
   btn.disabled = true; btn.textContent = 'Enviando…';
   try{
     const path = await uploadArquivo(file, `fotos/${o.id}`);
-    const { error } = await sb.from('fotos').insert({
+    const { data, error } = await sb.from('fotos').insert({
       obra_id: o.id, storage_path: path,
       legenda: document.getElementById('foto_legenda').value.trim() || null
-    });
+    }).select().single();
     if(error) throw error;
-    state.currentObra = await loadObra(o.id);
+    o.fotos.unshift({ id:data.id, storagePath:data.storage_path, legenda:data.legenda });
     showToast('Foto adicionada.');
-    renderTabFotos(document.getElementById('tabContent'), state.currentObra);
+    renderTabFotos(document.getElementById('tabContent'), o);
   }catch(err){
     console.error(err);
     showToast('Erro ao enviar foto.');
@@ -1202,92 +1501,9 @@ async function removeFoto(id){
   const { error } = await sb.from('fotos').delete().eq('id', id);
   if(error){ console.error(error); showToast('Erro ao remover foto.'); return; }
   if(foto) await removeArquivo(foto.storagePath);
-  state.currentObra = await loadObra(o.id);
+  o.fotos = (o.fotos||[]).filter(f=>f.id!==id);
   showToast('Foto removida.');
-  renderTabFotos(document.getElementById('tabContent'), state.currentObra);
-}
-
-/* ---- Tab: Atualizações ---- */
-function renderTabAtualizacoes(wrap, o){
-  const atualizacoes = o.atualizacoes || [];
-  wrap.innerHTML = `
-    <div class="panel">
-      <h3>Nova Atualização</h3>
-      <div class="field-grid">
-        <div class="field wide"><label>Texto</label><textarea id="a_texto" rows="2" placeholder="Ex: Reforma do telhado concluída"></textarea></div>
-        <div class="field"><label>Data</label><input type="date" id="a_data" value="${new Date().toISOString().slice(0,10)}"></div>
-      </div>
-      <button class="btn primary" onclick="addAtualizacao()">Adicionar</button>
-    </div>
-    <div class="panel">
-      <h3>Histórico</h3>
-      ${atualizacoes.length ? atualizacoes.map(a=>`
-        <div class="list-row">
-          <div>
-            <div class="main-txt">${escapeHtml(a.texto)}</div>
-            <div class="sub-txt">${fmtDate(a.data)}</div>
-          </div>
-          <div class="row-actions">
-            <button class="icon-btn" onclick="editAtualizacaoModal('${a.id}')" title="Editar">✎</button>
-            <button class="icon-btn" onclick="removeAtualizacao('${a.id}')">✕</button>
-          </div>
-        </div>
-      `).join('') : '<div class="empty-side">Nenhuma atualização registrada ainda.</div>'}
-    </div>
-  `;
-}
-function editAtualizacaoModal(id){
-  const o = state.currentObra;
-  const a = (o.atualizacoes||[]).find(x=>x.id===id);
-  if(!a) return;
-  openModal(`
-    <h3>Editar Atualização</h3>
-    <div class="field" style="margin-bottom:12px;">
-      <label>Texto</label>
-      <textarea id="ea_texto" rows="3">${escapeHtml(a.texto)}</textarea>
-    </div>
-    <div class="field" style="margin-bottom:12px;">
-      <label>Data</label>
-      <input type="date" id="ea_data" value="${a.data||''}">
-    </div>
-    <div class="modal-actions">
-      <button class="btn" onclick="closeModal()">Cancelar</button>
-      <button class="btn primary" onclick="saveEditAtualizacao('${id}')">Salvar</button>
-    </div>
-  `);
-}
-async function saveEditAtualizacao(id){
-  const texto = document.getElementById('ea_texto').value.trim();
-  if(!texto){ showToast('Escreva o texto da atualização.'); return; }
-  const o = state.currentObra;
-  const { error } = await sb.from('atualizacoes').update({
-    texto, data: document.getElementById('ea_data').value || null
-  }).eq('id', id);
-  if(error){ console.error(error); showToast('Erro ao salvar atualização.'); return; }
-  state.currentObra = await loadObra(o.id);
-  closeModal();
-  showToast('Atualização editada.');
-  renderTabAtualizacoes(document.getElementById('tabContent'), state.currentObra);
-}
-async function addAtualizacao(){
-  const texto = document.getElementById('a_texto').value.trim();
-  if(!texto){ showToast('Escreva o texto da atualização.'); return; }
-  const o = state.currentObra;
-  const { error } = await sb.from('atualizacoes').insert({
-    obra_id: o.id, texto,
-    data: document.getElementById('a_data').value || null
-  });
-  if(error){ console.error(error); showToast('Erro ao salvar atualização.'); return; }
-  state.currentObra = await loadObra(o.id);
-  showToast('Atualização adicionada.');
-  renderTabAtualizacoes(document.getElementById('tabContent'), state.currentObra);
-}
-async function removeAtualizacao(id){
-  const o = state.currentObra;
-  const { error } = await sb.from('atualizacoes').delete().eq('id', id);
-  if(error){ console.error(error); showToast('Erro ao remover.'); return; }
-  state.currentObra = await loadObra(o.id);
-  renderTabAtualizacoes(document.getElementById('tabContent'), state.currentObra);
+  renderTabFotos(document.getElementById('tabContent'), o);
 }
 
 /* ---------------- Status change / delete obra ---------------- */
