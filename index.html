@@ -41,6 +41,7 @@ body{
   color: var(--ink);
   font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
   min-height: 100vh;
+  overflow-wrap: anywhere;
 }
 
 ::selection{ background: var(--amber-tint); color: var(--ink); }
@@ -86,7 +87,7 @@ a{ color: var(--blue); }
   width: 300px; flex-shrink:0;
   border-right: 1.5px solid var(--ink);
   padding: 18px 16px 40px;
-  overflow-y:auto;
+  overflow-y:auto; overflow-x:hidden;
 }
 .sidebar h2{
   font-size: 11px; text-transform:uppercase; letter-spacing:1.6px;
@@ -136,7 +137,7 @@ a{ color: var(--blue); }
 .stamp.vendido{ color: var(--green); }
 
 /* ---------- Main ---------- */
-.main{ flex:1; min-width:0; overflow-y:auto; padding: 28px 32px 80px; }
+.main{ flex:1; min-width:0; overflow-y:auto; overflow-x:hidden; padding: 28px 32px 80px; }
 
 .section-title{
   font-family:'Archivo Black', sans-serif; font-size: 26px; margin: 0 0 4px;
@@ -145,9 +146,10 @@ a{ color: var(--blue); }
 
 /* Dashboard cards */
 .cards-row{ display:grid; grid-template-columns: repeat(4, 1fr); gap:14px; margin-bottom: 30px; }
+@media (min-width: 861px){ .cards-row.cols-3{ grid-template-columns: repeat(3, 1fr); } }
 .card{
   background: rgba(255,255,255,0.5); border:1px solid var(--line); border-radius: var(--radius);
-  padding: 16px; position:relative;
+  padding: 16px; position:relative; min-width:0;
 }
 .card::before{
   content:''; position:absolute; top:0; left:0; width: 3px; height:100%;
@@ -849,7 +851,7 @@ function renderTab(){
 function renderTabGeral(wrap, o){
   const lucro = lucroObra(o);
   wrap.innerHTML = `
-    <div class="cards-row" style="grid-template-columns: repeat(3,1fr);">
+    <div class="cards-row cols-3">
       <div class="card"><div class="label">Valor de Compra</div><div class="value num">${fmtMoney(o.valorCompra)}</div></div>
       <div class="card amber"><div class="label">Gasto em Reforma</div><div class="value num">${fmtMoney(totalDespesas(o))}</div></div>
       <div class="card ${lucro>=0?'green':'red'}"><div class="label">Lucro ${o.valorVendaReal?'Realizado':'Projetado'}</div><div class="value num">${fmtMoney(lucro)}</div></div>
@@ -947,7 +949,10 @@ function renderTabOrcamento(wrap, o){
           </div>
           <div style="display:flex; align-items:center; gap:12px;">
             <div class="amount">${fmtMoney(d.valor)}</div>
-            <div class="row-actions"><button class="icon-btn" onclick="confirmRemoveDespesa('${d.id}', '${escapeHtml((d.descricao||d.categoria)||'').replace(/'/g,"\\'")}')">✕</button></div>
+            <div class="row-actions">
+              <button class="icon-btn" onclick="editDespesaModal('${d.id}')" title="Editar">✎</button>
+              <button class="icon-btn" onclick="confirmRemoveDespesa('${d.id}', '${escapeHtml((d.descricao||d.categoria)||'').replace(/'/g,"\\'")}')">✕</button>
+            </div>
           </div>
         </div>
       `).join('') : '<div class="empty-side">Nenhuma despesa lançada ainda.</div>'}
@@ -1009,6 +1014,83 @@ async function addDespesa(){
   o.despesas.push({ id:data.id, categoria:data.categoria, descricao:data.descricao, valor:data.valor, data:data.data, socioId:data.socio_id, notaFiscalPath:data.nota_fiscal_path, notaFiscalNome:data.nota_fiscal_nome });
   pendingNotaFiscal = null;
   showToast('Despesa adicionada.');
+  renderTabOrcamento(document.getElementById('tabContent'), o);
+}
+let pendingNotaFiscalEdit = null;
+function editDespesaModal(id){
+  const o = state.currentObra;
+  const d = (o.despesas||[]).find(x=>x.id===id);
+  if(!d) return;
+  const socios = o.socios || [];
+  pendingNotaFiscalEdit = null;
+  openModal(`
+    <h3>Editar Despesa</h3>
+    <div class="field-grid">
+      <div class="field"><label>Categoria</label>
+        <select id="ed_categoria">
+          ${['Material','Mão de obra','Projeto/Licença','Documentação/Cartório','Impostos','Outros'].map(c=>`<option ${d.categoria===c?'selected':''}>${c}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Descrição</label><input type="text" id="ed_descricao" value="${escapeHtml(d.descricao||'')}"></div>
+      <div class="field"><label>Valor (R$)</label><input type="text" inputmode="decimal" id="ed_valor" value="${moneyInputValue(d.valor)}" oninput="moneyMaskInput(this)"></div>
+      <div class="field"><label>Data</label><input type="date" id="ed_data" value="${d.data||''}"></div>
+      <div class="field"><label>Pago por</label>
+        <select id="ed_socio">
+          <option value="">Dividir igualmente entre os sócios</option>
+          ${socios.map(s=>`<option value="${s.socioId}" ${d.socioId===s.socioId?'selected':''}>${escapeHtml(s.nome)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Nota Fiscal ${d.notaFiscalPath ? '(substituir, opcional)' : '(opcional, foto)'}</label><input type="file" id="ed_notaArquivo" accept="image/*" onchange="handleNotaFiscalEditUpload(this)"></div>
+    </div>
+    ${d.notaFiscalPath ? `<div class="sub-txt" style="margin-bottom:10px;">Nota atual: <a href="javascript:void(0)" onclick="openPhotoModal('${d.notaFiscalPath}', 'Nota Fiscal')">📎 ${escapeHtml(d.notaFiscalNome||'ver nota')}</a></div>` : ''}
+    <div id="ed_notaStatus" class="sub-txt" style="margin-bottom:10px;"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn primary" onclick="saveEditDespesa('${id}')">Salvar</button>
+    </div>
+  `);
+}
+async function handleNotaFiscalEditUpload(inputEl){
+  const file = inputEl.files[0];
+  if(!file) return;
+  const o = state.currentObra;
+  const statusEl = document.getElementById('ed_notaStatus');
+  statusEl.textContent = 'Enviando nota fiscal…';
+  try{
+    const path = await uploadArquivo(file, `notas-fiscais/${o.id}`);
+    pendingNotaFiscalEdit = { path, nome: file.name };
+    statusEl.textContent = 'Nova nota enviada — será salva ao clicar em Salvar.';
+  }catch(err){
+    console.error(err);
+    statusEl.textContent = 'Erro ao enviar a nota fiscal.';
+    pendingNotaFiscalEdit = null;
+  }
+}
+async function saveEditDespesa(id){
+  const valor = money2num(document.getElementById('ed_valor').value);
+  if(!valor || valor<=0){ showToast('Informe um valor válido.'); return; }
+  const o = state.currentObra;
+  const payload = {
+    categoria: document.getElementById('ed_categoria').value,
+    descricao: document.getElementById('ed_descricao').value.trim(),
+    valor: Number(valor),
+    data: document.getElementById('ed_data').value || null,
+    socio_id: document.getElementById('ed_socio').value || null
+  };
+  if(pendingNotaFiscalEdit){
+    payload.nota_fiscal_path = pendingNotaFiscalEdit.path;
+    payload.nota_fiscal_nome = pendingNotaFiscalEdit.nome;
+  }
+  const { error } = await sb.from('despesas').update(payload).eq('id', id);
+  if(error){ console.error(error); showToast('Erro ao salvar despesa.'); return; }
+  const d = (o.despesas||[]).find(x=>x.id===id);
+  if(d){
+    Object.assign(d, { categoria:payload.categoria, descricao:payload.descricao, valor:payload.valor, data:payload.data, socioId:payload.socio_id });
+    if(pendingNotaFiscalEdit){ d.notaFiscalPath = payload.nota_fiscal_path; d.notaFiscalNome = payload.nota_fiscal_nome; }
+  }
+  pendingNotaFiscalEdit = null;
+  closeModal();
+  showToast('Despesa atualizada.');
   renderTabOrcamento(document.getElementById('tabContent'), o);
 }
 function confirmRemoveDespesa(id, label){
