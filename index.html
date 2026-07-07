@@ -486,7 +486,7 @@ async function loadObra(id){
     dataVenda: o.data_venda || '', notas: o.notas || '',
     margemLucroAlvo: o.margem_lucro_alvo ?? '', corretorNome: o.corretor_nome || '',
     comissaoCorretorPercentual: o.comissao_corretor_percentual ?? '',
-    despesas: (despesasRes.data||[]).map(d=>({ id:d.id, categoria:d.categoria, descricao:d.descricao, valor:d.valor, data:d.data, socioId:d.socio_id, notaFiscalPath:d.nota_fiscal_path, notaFiscalNome:d.nota_fiscal_nome })),
+    despesas: (despesasRes.data||[]).map(d=>({ id:d.id, categoria:d.categoria, descricao:d.descricao, valor:d.valor, data:d.data, socioId:d.socio_id, notaFiscalPath:d.nota_fiscal_path, notaFiscalNome:d.nota_fiscal_nome, pago:d.pago })),
     etapas: (etapasRes.data||[]).map(e=>({ id:e.id, nome:e.nome, inicio:e.inicio, fim:e.fim, status:e.status, fotoPath:e.foto_path, fotoNome:e.foto_nome })),
     documentos: (docsRes.data||[]).map(d=>({ id:d.id, titulo:d.titulo, link:d.link, nota:d.nota, arquivoPath:d.arquivo_path, arquivoNome:d.arquivo_nome, arquivoTipo:d.arquivo_tipo })),
     atualizacoes: (atualizRes.data||[]).map(a=>({ id:a.id, texto:a.texto, data:a.data })),
@@ -934,6 +934,12 @@ function renderTabOrcamento(wrap, o){
             ${socios.map(s=>`<option value="${s.socioId}">${escapeHtml(s.nome)}</option>`).join('')}
           </select>
         </div>
+        <div class="field"><label>Situação</label>
+          <select id="d_pago">
+            <option value="false">Pendente</option>
+            <option value="true">Pago</option>
+          </select>
+        </div>
         <div class="field"><label>Nota Fiscal (opcional, foto)</label><input type="file" id="d_notaArquivo" accept="image/*" onchange="handleNotaFiscalUpload(this)"></div>
       </div>
       <div id="d_notaStatus" class="sub-txt" style="margin-bottom:10px;"></div>
@@ -946,6 +952,7 @@ function renderTabOrcamento(wrap, o){
           <div>
             <div class="main-txt">${escapeHtml(d.descricao||d.categoria)}</div>
             <div class="sub-txt">${escapeHtml(d.categoria)} · ${fmtDate(d.data)} · ${d.socioId ? 'Pago por '+escapeHtml(socioNome(o,d.socioId)) : 'Dividido igualmente'}${d.notaFiscalPath ? ` · <a href="javascript:void(0)" onclick="openPhotoModal('${d.notaFiscalPath}', 'Nota Fiscal')">📎 Nota Fiscal</a>` : ''}</div>
+            <div style="margin-top:5px;"><span class="pill ${d.pago?'concluido':'pendente'}" style="cursor:pointer;" onclick="toggleDespesaPago('${d.id}')" title="Clique para alternar situação">${d.pago?'✓ Pago':'Pendente'}</span></div>
           </div>
           <div style="display:flex; align-items:center; gap:12px;">
             <div class="amount">${fmtMoney(d.valor)}</div>
@@ -1007,13 +1014,24 @@ async function addDespesa(){
     valor: Number(valor),
     data: document.getElementById('d_data').value || null,
     socio_id: document.getElementById('d_socio').value || null,
+    pago: document.getElementById('d_pago').value === 'true',
     nota_fiscal_path: pendingNotaFiscal ? pendingNotaFiscal.path : null,
     nota_fiscal_nome: pendingNotaFiscal ? pendingNotaFiscal.nome : null
   }).select().single();
   if(error){ console.error(error); showToast('Erro ao salvar despesa.'); return; }
-  o.despesas.push({ id:data.id, categoria:data.categoria, descricao:data.descricao, valor:data.valor, data:data.data, socioId:data.socio_id, notaFiscalPath:data.nota_fiscal_path, notaFiscalNome:data.nota_fiscal_nome });
+  o.despesas.push({ id:data.id, categoria:data.categoria, descricao:data.descricao, valor:data.valor, data:data.data, socioId:data.socio_id, notaFiscalPath:data.nota_fiscal_path, notaFiscalNome:data.nota_fiscal_nome, pago:data.pago });
   pendingNotaFiscal = null;
   showToast('Despesa adicionada.');
+  renderTabOrcamento(document.getElementById('tabContent'), o);
+}
+async function toggleDespesaPago(id){
+  const o = state.currentObra;
+  const d = (o.despesas||[]).find(x=>x.id===id);
+  if(!d) return;
+  const novoPago = !d.pago;
+  const { error } = await sb.from('despesas').update({ pago: novoPago }).eq('id', id);
+  if(error){ console.error(error); showToast('Erro ao atualizar situação.'); return; }
+  d.pago = novoPago;
   renderTabOrcamento(document.getElementById('tabContent'), o);
 }
 let pendingNotaFiscalEdit = null;
@@ -1038,6 +1056,12 @@ function editDespesaModal(id){
         <select id="ed_socio">
           <option value="">Dividir igualmente entre os sócios</option>
           ${socios.map(s=>`<option value="${s.socioId}" ${d.socioId===s.socioId?'selected':''}>${escapeHtml(s.nome)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Situação</label>
+        <select id="ed_pago">
+          <option value="false" ${!d.pago?'selected':''}>Pendente</option>
+          <option value="true" ${d.pago?'selected':''}>Pago</option>
         </select>
       </div>
       <div class="field"><label>Nota Fiscal ${d.notaFiscalPath ? '(substituir, opcional)' : '(opcional, foto)'}</label><input type="file" id="ed_notaArquivo" accept="image/*" onchange="handleNotaFiscalEditUpload(this)"></div>
@@ -1075,7 +1099,8 @@ async function saveEditDespesa(id){
     descricao: document.getElementById('ed_descricao').value.trim(),
     valor: Number(valor),
     data: document.getElementById('ed_data').value || null,
-    socio_id: document.getElementById('ed_socio').value || null
+    socio_id: document.getElementById('ed_socio').value || null,
+    pago: document.getElementById('ed_pago').value === 'true'
   };
   if(pendingNotaFiscalEdit){
     payload.nota_fiscal_path = pendingNotaFiscalEdit.path;
@@ -1085,7 +1110,7 @@ async function saveEditDespesa(id){
   if(error){ console.error(error); showToast('Erro ao salvar despesa.'); return; }
   const d = (o.despesas||[]).find(x=>x.id===id);
   if(d){
-    Object.assign(d, { categoria:payload.categoria, descricao:payload.descricao, valor:payload.valor, data:payload.data, socioId:payload.socio_id });
+    Object.assign(d, { categoria:payload.categoria, descricao:payload.descricao, valor:payload.valor, data:payload.data, socioId:payload.socio_id, pago:payload.pago });
     if(pendingNotaFiscalEdit){ d.notaFiscalPath = payload.nota_fiscal_path; d.notaFiscalNome = payload.nota_fiscal_nome; }
   }
   pendingNotaFiscalEdit = null;
