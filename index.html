@@ -484,6 +484,7 @@ async function loadObra(id){
     dataVenda: o.data_venda || '', notas: o.notas || '',
     margemLucroAlvo: o.margem_lucro_alvo ?? '', corretorNome: o.corretor_nome || '',
     comissaoCorretorPercentual: o.comissao_corretor_percentual ?? '',
+    percentualEmpreiteira: o.percentual_empreiteira ?? '',
     despesas: (despesasRes.data||[]).map(d=>({ id:d.id, categoria:d.categoria, descricao:d.descricao, valor:d.valor, data:d.data, socioId:d.socio_id, notaFiscalPath:d.nota_fiscal_path, notaFiscalNome:d.nota_fiscal_nome, pago:d.pago })),
     etapas: (etapasRes.data||[]).map(e=>({ id:e.id, nome:e.nome, inicio:e.inicio, fim:e.fim, status:e.status, fotoPath:e.foto_path, fotoNome:e.foto_nome })),
     documentos: (docsRes.data||[]).map(d=>({ id:d.id, titulo:d.titulo, link:d.link, nota:d.nota, arquivoPath:d.arquivo_path, arquivoNome:d.arquivo_nome, arquivoTipo:d.arquivo_tipo })),
@@ -506,8 +507,16 @@ function comissaoCorretorValor(obra){
   if(!pct) return 0;
   return valorVendaEfetivo(obra) * (pct/100);
 }
-function lucroObra(obra){
+function lucroAntesEmpreiteira(obra){
   return valorVendaEfetivo(obra) - (Number(obra.valorCompra)||0) - totalDespesas(obra) - comissaoCorretorValor(obra);
+}
+function comissaoEmpreiteiraValor(obra){
+  const pct = Number(obra.percentualEmpreiteira)||0;
+  if(!pct) return 0;
+  return lucroAntesEmpreiteira(obra) * (pct/100);
+}
+function lucroObra(obra){
+  return lucroAntesEmpreiteira(obra) - comissaoEmpreiteiraValor(obra);
 }
 
 /* ---------------- Init ---------------- */
@@ -555,7 +564,7 @@ async function goDashboard(){
   const obras = data.map(o=>({
     id:o.id, nome:o.nome, endereco:o.endereco, status:o.status,
     valorCompra:o.valor_compra, valorVendaEstimado:o.valor_venda_estimado, valorVendaReal:o.valor_venda_real,
-    comissaoCorretorPercentual:o.comissao_corretor_percentual,
+    comissaoCorretorPercentual:o.comissao_corretor_percentual, percentualEmpreiteira:o.percentual_empreiteira,
     despesas: o.despesas || []
   }));
 
@@ -857,24 +866,35 @@ function renderTab(){
 function renderTabGeral(wrap, o){
   const lucro = lucroObra(o);
   const comissao = comissaoCorretorValor(o);
+  const empreiteira = comissaoEmpreiteiraValor(o);
   wrap.innerHTML = `
     <div class="cards-row cols-3">
       <div class="card"><div class="label">Valor de Compra</div><div class="value num">${fmtMoney(o.valorCompra)}</div></div>
       <div class="card amber"><div class="label">Gasto em Reforma</div><div class="value num">${fmtMoney(totalDespesas(o))}</div></div>
       <div class="card ${lucro>=0?'green':'red'}"><div class="label">Lucro ${o.valorVendaReal?'Realizado':'Projetado'}</div><div class="value num">${fmtMoney(lucro)}</div></div>
     </div>
-    ${comissao ? `<p class="sub-txt" style="margin:-18px 0 20px;">Já descontado ${o.comissaoCorretorPercentual}% de comissão do corretor sobre o valor de venda: −${fmtMoney(comissao)}</p>` : ''}
+    ${(comissao || empreiteira) ? `<p class="sub-txt" style="margin:-18px 0 20px; line-height:1.6;">
+      ${comissao ? `Comissão do corretor (${o.comissaoCorretorPercentual}% sobre o valor de venda): −${fmtMoney(comissao)}<br>` : ''}
+      ${empreiteira ? `Percentual da empreiteira (${o.percentualEmpreiteira}% sobre o lucro): −${fmtMoney(empreiteira)}` : ''}
+    </p>` : ''}
     <div class="panel">
       <h3>Dados do Imóvel</h3>
       <form id="geralForm" onsubmit="return false;">
         <div class="field-grid">
           <div class="field"><label>Data da Compra</label><input type="date" id="f_dataCompra" value="${o.dataCompra||''}"></div>
-          <div class="field"><label>Valor de Compra (R$)</label><input type="text" inputmode="decimal" id="f_valorCompra" value="${moneyInputValue(o.valorCompra)}" oninput="moneyMaskInput(this)"></div>
-          <div class="field"><label>Valor de Venda Estimado (R$)</label><input type="text" inputmode="decimal" id="f_valorVendaEstimado" value="${moneyInputValue(o.valorVendaEstimado)}" oninput="moneyMaskInput(this)"></div>
-          <div class="field"><label>Valor de Venda Real (R$)</label><input type="text" inputmode="decimal" id="f_valorVendaReal" value="${moneyInputValue(o.valorVendaReal)}" oninput="moneyMaskInput(this)"></div>
+          <div class="field"><label>Valor de Compra (R$)</label><input type="text" inputmode="decimal" id="f_valorCompra" value="${moneyInputValue(o.valorCompra)}" oninput="moneyMaskInput(this); updateGeralPreview();"></div>
+          <div class="field"><label>Valor de Venda Estimado (R$)</label><input type="text" inputmode="decimal" id="f_valorVendaEstimado" value="${moneyInputValue(o.valorVendaEstimado)}" oninput="moneyMaskInput(this); updateGeralPreview();"></div>
+          <div class="field"><label>Valor de Venda Real (R$)</label><input type="text" inputmode="decimal" id="f_valorVendaReal" value="${moneyInputValue(o.valorVendaReal)}" oninput="moneyMaskInput(this); updateGeralPreview();"></div>
           <div class="field"><label>Data da Venda</label><input type="date" id="f_dataVenda" value="${o.dataVenda||''}"></div>
           <div class="field"><label>Corretor</label><input type="text" id="f_corretorNome" value="${escapeHtml(o.corretorNome||'')}"></div>
-          <div class="field"><label>Comissão Corretor (%)</label><input type="number" step="0.01" id="f_comissaoCorretor" value="${o.comissaoCorretorPercentual||''}"></div>
+          <div class="field"><label>Comissão Corretor (%)</label>
+            <input type="number" step="0.01" id="f_comissaoCorretor" value="${o.comissaoCorretorPercentual||''}" oninput="updateGeralPreview()">
+            <span class="sub-txt num" id="f_comissaoPreview" style="margin-top:2px;"></span>
+          </div>
+          <div class="field"><label>Percentual Empreiteira (%)</label>
+            <input type="number" step="0.01" id="f_percentualEmpreiteira" value="${o.percentualEmpreiteira||''}" oninput="updateGeralPreview()">
+            <span class="sub-txt num" id="f_empreiteiraPreview" style="margin-top:2px;"></span>
+          </div>
           <div class="field"><label>Margem de Lucro Alvo (%)</label><input type="number" step="0.01" id="f_margemLucroAlvo" value="${o.margemLucroAlvo||''}"></div>
         </div>
         <div class="field wide">
@@ -885,6 +905,21 @@ function renderTabGeral(wrap, o){
       </form>
     </div>
   `;
+  updateGeralPreview();
+}
+function updateGeralPreview(){
+  const o = state.currentObra;
+  const valorCompra = money2num(document.getElementById('f_valorCompra').value) || 0;
+  const valorVendaEstimado = money2num(document.getElementById('f_valorVendaEstimado').value) || 0;
+  const valorVendaReal = money2num(document.getElementById('f_valorVendaReal').value) || 0;
+  const comissaoPct = Number(document.getElementById('f_comissaoCorretor').value) || 0;
+  const empreiteiraPct = Number(document.getElementById('f_percentualEmpreiteira').value) || 0;
+  const vendaEfetivo = valorVendaReal || valorVendaEstimado;
+  const comissaoValor = vendaEfetivo * (comissaoPct/100);
+  const lucroAntes = vendaEfetivo - valorCompra - totalDespesas(o) - comissaoValor;
+  const empreiteiraValor = lucroAntes * (empreiteiraPct/100);
+  document.getElementById('f_comissaoPreview').textContent = comissaoPct ? '= ' + fmtMoney(comissaoValor) : '';
+  document.getElementById('f_empreiteiraPreview').textContent = empreiteiraPct ? '= ' + fmtMoney(empreiteiraValor) : '';
 }
 async function saveGeral(){
   const o = state.currentObra;
@@ -897,6 +932,7 @@ async function saveGeral(){
     notas: document.getElementById('f_notas').value,
     corretor_nome: document.getElementById('f_corretorNome').value || null,
     comissao_corretor_percentual: document.getElementById('f_comissaoCorretor').value || null,
+    percentual_empreiteira: document.getElementById('f_percentualEmpreiteira').value || null,
     margem_lucro_alvo: document.getElementById('f_margemLucroAlvo').value || null
   };
   const { error } = await sb.from('obras').update(payload).eq('id', o.id);
@@ -906,6 +942,7 @@ async function saveGeral(){
     valorVendaEstimado: payload.valor_venda_estimado ?? '', valorVendaReal: payload.valor_venda_real ?? '',
     dataVenda: payload.data_venda || '', notas: payload.notas || '',
     corretorNome: payload.corretor_nome || '', comissaoCorretorPercentual: payload.comissao_corretor_percentual ?? '',
+    percentualEmpreiteira: payload.percentual_empreiteira ?? '',
     margemLucroAlvo: payload.margem_lucro_alvo ?? ''
   });
   showToast('Dados salvos.');
