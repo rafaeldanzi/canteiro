@@ -130,11 +130,10 @@ a{ color: var(--blue); }
   padding: 3px 8px; border: 1.5px dashed currentColor; border-radius: 2px;
   transform: rotate(-1.5deg);
 }
-.stamp.prospeccao{ color: var(--ink-soft); }
 .stamp.negociacao{ color: var(--red); }
+.stamp.comprada{ color: var(--blue); }
 .stamp.reforma{ color: var(--amber); }
-.stamp.venda{ color: var(--blue); }
-.stamp.vendido{ color: var(--green); }
+.stamp.vendida{ color: var(--green); }
 
 /* ---------- Main ---------- */
 .main{ flex:1; min-width:0; overflow-y:auto; overflow-x:hidden; padding: 28px 32px 80px; }
@@ -396,13 +395,12 @@ function openPhotoModal(path, titulo){
 }
 
 const STATUS_LABELS = {
-  prospeccao: 'Prospecção',
   negociacao: 'Em Negociação',
+  comprada: 'Comprada',
   reforma: 'Em Reforma',
-  venda: 'À Venda',
-  vendido: 'Vendido'
+  vendida: 'Vendida'
 };
-const STATUS_CLASS = { prospeccao:'prospeccao', negociacao:'negociacao', reforma:'reforma', venda:'venda', vendido:'vendido' };
+const STATUS_CLASS = { negociacao:'negociacao', comprada:'comprada', reforma:'reforma', vendida:'vendida' };
 const ETAPA_STATUS = { pendente:'Pendente', andamento:'Em Andamento', concluido:'Concluído' };
 
 let state = {
@@ -503,8 +501,13 @@ function valorVendaEfetivo(obra){
   if(obra.valorVendaReal) return Number(obra.valorVendaReal)||0;
   return Number(obra.valorVendaEstimado)||0;
 }
+function comissaoCorretorValor(obra){
+  const pct = Number(obra.comissaoCorretorPercentual)||0;
+  if(!pct) return 0;
+  return valorVendaEfetivo(obra) * (pct/100);
+}
 function lucroObra(obra){
-  return valorVendaEfetivo(obra) - (Number(obra.valorCompra)||0) - totalDespesas(obra);
+  return valorVendaEfetivo(obra) - (Number(obra.valorCompra)||0) - totalDespesas(obra) - comissaoCorretorValor(obra);
 }
 
 /* ---------------- Init ---------------- */
@@ -527,7 +530,7 @@ function renderSidebar(){
     <div class="obra-card ${state.currentObra && state.currentObra.id===o.id ? 'active':''}" onclick="openObra('${o.id}')">
       <div class="name">${escapeHtml(o.nome)}</div>
       <div class="addr">${escapeHtml(o.endereco||'')}</div>
-      <span class="stamp ${STATUS_CLASS[o.status]||'prospeccao'}">${STATUS_LABELS[o.status]||'Prospecção'}</span>
+      <span class="stamp ${STATUS_CLASS[o.status]||'negociacao'}">${STATUS_LABELS[o.status]||'Em Negociação'}</span>
     </div>
   `).join('');
 }
@@ -552,18 +555,19 @@ async function goDashboard(){
   const obras = data.map(o=>({
     id:o.id, nome:o.nome, endereco:o.endereco, status:o.status,
     valorCompra:o.valor_compra, valorVendaEstimado:o.valor_venda_estimado, valorVendaReal:o.valor_venda_real,
+    comissaoCorretorPercentual:o.comissao_corretor_percentual,
     despesas: o.despesas || []
   }));
 
   const totalInvestido = obras.reduce((s,o)=> s + (Number(o.valorCompra)||0) + totalDespesas(o), 0);
   const totalGastoReforma = obras.reduce((s,o)=> s + totalDespesas(o), 0);
   const lucroTotal = obras.reduce((s,o)=> s + lucroObra(o), 0);
-  const statusOrder = ['negociacao','reforma','venda','prospeccao','vendido'];
-  const ativas = obras.filter(o=> o.status==='negociacao' || o.status==='reforma' || o.status==='venda').length;
+  const statusOrder = ['negociacao','comprada','reforma','vendida'];
+  const ativas = obras.filter(o=> o.status!=='vendida').length;
   const porStatus = statusOrder.map(k=>({ k, n: obras.filter(o=>o.status===k).length })).filter(x=>x.n>0);
 
-  const ativasList = obras.filter(o=>o.status!=='vendido');
-  const concluidasList = obras.filter(o=>o.status==='vendido');
+  const ativasList = obras.filter(o=>o.status!=='vendida');
+  const concluidasList = obras.filter(o=>o.status==='vendida');
 
   function summaryCard(o){
     const lucro = lucroObra(o);
@@ -574,9 +578,11 @@ async function goDashboard(){
             <strong>${escapeHtml(o.nome)}</strong>
             <div class="addr">${escapeHtml(o.endereco||'')}</div>
           </div>
-          <div style="display:flex; align-items:center; gap:10px;">
-            <span class="stamp ${STATUS_CLASS[o.status]}">${STATUS_LABELS[o.status]}</span>
-            <span class="osc-chevron" id="oscChevron-${o.id}">▾</span>
+          <div style="display:flex; align-items:center; gap:10px;" onclick="event.stopPropagation()">
+            <select class="status-select" style="padding:5px 8px; font-size:11px;" onchange="changeStatusFromCard('${o.id}', this.value)">
+              ${Object.keys(STATUS_LABELS).map(k=>`<option value="${k}" ${o.status===k?'selected':''}>${STATUS_LABELS[k]}</option>`).join('')}
+            </select>
+            <span class="osc-chevron" id="oscChevron-${o.id}" onclick="toggleObraSummary('${o.id}')" style="cursor:pointer; padding:4px;">▾</span>
           </div>
         </div>
         <div class="osc-details" id="oscDetails-${o.id}">
@@ -850,12 +856,14 @@ function renderTab(){
 /* ---- Tab: Visão Geral ---- */
 function renderTabGeral(wrap, o){
   const lucro = lucroObra(o);
+  const comissao = comissaoCorretorValor(o);
   wrap.innerHTML = `
     <div class="cards-row cols-3">
       <div class="card"><div class="label">Valor de Compra</div><div class="value num">${fmtMoney(o.valorCompra)}</div></div>
       <div class="card amber"><div class="label">Gasto em Reforma</div><div class="value num">${fmtMoney(totalDespesas(o))}</div></div>
       <div class="card ${lucro>=0?'green':'red'}"><div class="label">Lucro ${o.valorVendaReal?'Realizado':'Projetado'}</div><div class="value num">${fmtMoney(lucro)}</div></div>
     </div>
+    ${comissao ? `<p class="sub-txt" style="margin:-18px 0 20px;">Já descontado ${o.comissaoCorretorPercentual}% de comissão do corretor sobre o valor de venda: −${fmtMoney(comissao)}</p>` : ''}
     <div class="panel">
       <h3>Dados do Imóvel</h3>
       <form id="geralForm" onsubmit="return false;">
@@ -1627,6 +1635,16 @@ async function changeStatus(newStatus){
   renderSidebar();
   showToast('Status atualizado para "'+STATUS_LABELS[newStatus]+'".');
 }
+async function changeStatusFromCard(obraId, newStatus){
+  const { error } = await sb.from('obras').update({ status: newStatus }).eq('id', obraId);
+  if(error){ console.error(error); showToast('Erro ao atualizar status.'); return; }
+  const idx = state.obrasIndex.find(x=>x.id===obraId);
+  if(idx) idx.status = newStatus;
+  if(state.currentObra && state.currentObra.id===obraId) state.currentObra.status = newStatus;
+  renderSidebar();
+  showToast('Status atualizado para "'+STATUS_LABELS[newStatus]+'".');
+  goDashboard();
+}
 function confirmDeleteObra(){
   const o = state.currentObra;
   openModal(`
@@ -1684,7 +1702,7 @@ async function submitObraModal(editingId){
     renderObra();
     showToast('Obra atualizada.');
   } else {
-    const { data, error } = await sb.from('obras').insert({ nome, endereco, status:'prospeccao' }).select().single();
+    const { data, error } = await sb.from('obras').insert({ nome, endereco, status:'negociacao' }).select().single();
     if(error){ console.error(error); showToast('Erro ao criar obra.'); return; }
     await loadObrasIndex();
     closeModal();
