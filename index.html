@@ -409,6 +409,7 @@ let state = {
   fundoAportes: [], // aportes do Fundo de Investimento (global, não ligado a obra)
   todasDespesas: [], // despesas de todas as obras (para calcular saldo investido/caixa por sócio)
   todasParticipacoes: [], // participações de todas as obras (para os pesos de meta de investimento)
+  currentAlbumId: null, // álbum de fotos aberto na aba Fotos (null = visão geral de álbuns)
   currentObra: null, // full obra object currently loaded
   currentView: 'dashboard', // 'dashboard' | 'obra' | 'fundo'
   currentTab: 'geral',
@@ -468,14 +469,15 @@ async function loadAllSocios(){
   state.allSocios = data;
 }
 async function loadObra(id){
-  const [obraRes, despesasRes, etapasRes, docsRes, atualizRes, particRes, fotosRes] = await Promise.all([
+  const [obraRes, despesasRes, etapasRes, docsRes, atualizRes, particRes, fotosRes, albunsRes] = await Promise.all([
     sb.from('obras').select('*').eq('id', id).single(),
     sb.from('despesas').select('*').eq('obra_id', id).order('data', { ascending:false }),
     sb.from('etapas').select('*').eq('obra_id', id).order('created_at', { ascending:true }),
     sb.from('documentos').select('*').eq('obra_id', id).order('created_at', { ascending:true }),
     sb.from('atualizacoes').select('*').eq('obra_id', id).order('data', { ascending:false }),
     sb.from('participacoes').select('id, percentual, aporte, meta_investimento_percentual, socio_id, socios(id, nome, email)').eq('obra_id', id),
-    sb.from('fotos').select('*').eq('obra_id', id).order('created_at', { ascending:false })
+    sb.from('fotos').select('*').eq('obra_id', id).order('created_at', { ascending:false }),
+    sb.from('albuns').select('*').eq('obra_id', id).order('created_at', { ascending:true })
   ]);
   if(obraRes.error || !obraRes.data) return null;
   const o = obraRes.data;
@@ -492,7 +494,8 @@ async function loadObra(id){
     documentos: (docsRes.data||[]).map(d=>({ id:d.id, titulo:d.titulo, link:d.link, nota:d.nota, arquivoPath:d.arquivo_path, arquivoNome:d.arquivo_nome, arquivoTipo:d.arquivo_tipo })),
     atualizacoes: (atualizRes.data||[]).map(a=>({ id:a.id, texto:a.texto, data:a.data, etapaId:a.etapa_id })),
     socios: (particRes.data||[]).map(p=>({ id:p.id, socioId:p.socio_id, nome: p.socios ? p.socios.nome : '(sócio removido)', percentual:p.percentual, aporte:p.aporte, metaInvestimentoPercentual:p.meta_investimento_percentual })),
-    fotos: (fotosRes.data||[]).map(f=>({ id:f.id, storagePath:f.storage_path, legenda:f.legenda }))
+    fotos: (fotosRes.data||[]).map(f=>({ id:f.id, storagePath:f.storage_path, legenda:f.legenda, albumId:f.album_id, createdAt:f.created_at })),
+    albuns: (albunsRes.data||[]).map(a=>({ id:a.id, nome:a.nome }))
   };
 }
 
@@ -926,6 +929,7 @@ async function openObra(id){
   state.currentObra = obra;
   state.currentView='obra';
   state.currentTab='geral';
+  state.currentAlbumId = null;
   document.getElementById('dashLinkBtn').classList.remove('active');
   document.getElementById('fundoLinkBtn').classList.remove('active');
   renderSidebar();
@@ -964,7 +968,7 @@ function renderObra(){
   renderTab();
 }
 
-function setTab(t){ state.currentTab = t; renderObra(); }
+function setTab(t){ state.currentTab = t; state.currentAlbumId = null; renderObra(); }
 
 function renderTab(){
   const o = state.currentObra;
@@ -1778,10 +1782,62 @@ async function removeDocumento(id){
 
 /* ---- Tab: Fotos ---- */
 function renderTabFotos(wrap, o){
-  const fotos = o.fotos || [];
+  if(state.currentAlbumId){
+    renderAlbumGaleria(wrap, o, state.currentAlbumId);
+  } else {
+    renderAlbunsOverview(wrap, o);
+  }
+}
+function fotosDoAlbum(o, albumId){
+  return (o.fotos||[]).filter(f=>f.albumId===albumId);
+}
+function renderAlbunsOverview(wrap, o){
+  const albuns = o.albuns || [];
   wrap.innerHTML = `
     <div class="panel">
       <h3>Nova Foto</h3>
+      <div class="field-grid">
+        <div class="field">
+          <label>Álbum</label>
+          <select id="foto_album" onchange="document.getElementById('foto_albumNovoWrap').style.display = this.value==='__novo__' ? 'flex' : 'none';">
+            <option value="">Selecione…</option>
+            ${albuns.map(a=>`<option value="${a.id}">${escapeHtml(a.nome)}</option>`).join('')}
+            <option value="__novo__">+ Novo álbum</option>
+          </select>
+        </div>
+        <div class="field" id="foto_albumNovoWrap" style="display:none;">
+          <label>Nome do Novo Álbum</label><input type="text" id="foto_albumNovoNome">
+        </div>
+        <div class="field"><label>Foto(s)</label><input type="file" id="foto_arquivo" accept="image/*" multiple></div>
+        <div class="field wide"><label>Legenda (opcional, aplicada a todas se selecionar mais de uma)</label><input type="text" id="foto_legenda" placeholder="Ex: Fachada antes da reforma"></div>
+      </div>
+      <button class="btn primary" id="foto_btnAdd" onclick="addFoto()">Adicionar Foto</button>
+    </div>
+    <div class="panel">
+      <h3>Álbuns (${albuns.length})</h3>
+      ${albuns.length ? `<div class="photo-grid">
+        ${albuns.map(a=>{
+          const fotosAlbum = fotosDoAlbum(o, a.id).slice().sort((x,y)=>(x.createdAt||'').localeCompare(y.createdAt||''));
+          const capa = fotosAlbum[0];
+          return `
+          <div class="photo-thumb" onclick="abrirAlbum('${a.id}')">
+            ${capa ? `<img src="${arquivoUrl(capa.storagePath)}" alt="${escapeHtml(a.nome)}">` : `<div style="height:120px; display:flex; align-items:center; justify-content:center; color:var(--ink-soft); font-size:12px;">Sem fotos</div>`}
+            <button class="rm" onclick="event.stopPropagation(); confirmRemoveAlbum('${a.id}', '${escapeHtml(a.nome).replace(/'/g,"\\'")}')">✕</button>
+            <div class="cap">${escapeHtml(a.nome)} · ${fotosAlbum.length} foto(s)</div>
+          </div>
+        `;}).join('')}
+      </div>` : '<div class="empty-side">Nenhum álbum criado ainda.</div>'}
+    </div>
+  `;
+}
+function renderAlbumGaleria(wrap, o, albumId){
+  const album = (o.albuns||[]).find(a=>a.id===albumId);
+  if(!album){ state.currentAlbumId = null; renderAlbunsOverview(wrap, o); return; }
+  const fotos = fotosDoAlbum(o, albumId);
+  wrap.innerHTML = `
+    <button class="btn small ghost" style="margin-bottom:14px;" onclick="fecharAlbum()">← Voltar aos Álbuns</button>
+    <div class="panel">
+      <h3>Nova Foto — ${escapeHtml(album.nome)}</h3>
       <div class="field-grid">
         <div class="field"><label>Foto(s)</label><input type="file" id="foto_arquivo" accept="image/*" multiple></div>
         <div class="field wide"><label>Legenda (opcional, aplicada a todas se selecionar mais de uma)</label><input type="text" id="foto_legenda" placeholder="Ex: Fachada antes da reforma"></div>
@@ -1789,7 +1845,7 @@ function renderTabFotos(wrap, o){
       <button class="btn primary" id="foto_btnAdd" onclick="addFoto()">Adicionar Foto</button>
     </div>
     <div class="panel">
-      <h3>Fotos da Obra (${fotos.length})</h3>
+      <h3>${escapeHtml(album.nome)} (${fotos.length})</h3>
       ${fotos.length ? `<div class="photo-grid">
         ${fotos.map(f=>`
           <div class="photo-thumb">
@@ -1798,14 +1854,37 @@ function renderTabFotos(wrap, o){
             ${f.legenda ? `<div class="cap">${escapeHtml(f.legenda)}</div>` : ''}
           </div>
         `).join('')}
-      </div>` : '<div class="empty-side">Nenhuma foto anexada ainda.</div>'}
+      </div>` : '<div class="empty-side">Nenhuma foto neste álbum ainda.</div>'}
     </div>
   `;
+}
+function abrirAlbum(id){
+  state.currentAlbumId = id;
+  renderTabFotos(document.getElementById('tabContent'), state.currentObra);
+}
+function fecharAlbum(){
+  state.currentAlbumId = null;
+  renderTabFotos(document.getElementById('tabContent'), state.currentObra);
 }
 async function addFoto(){
   const files = [...document.getElementById('foto_arquivo').files];
   if(!files.length){ showToast('Selecione ao menos uma foto.'); return; }
   const o = state.currentObra;
+  let albumId = state.currentAlbumId;
+  if(!albumId){
+    const sel = document.getElementById('foto_album').value;
+    if(!sel){ showToast('Selecione ou crie um álbum.'); return; }
+    if(sel === '__novo__'){
+      const nome = document.getElementById('foto_albumNovoNome').value.trim();
+      if(!nome){ showToast('Informe o nome do novo álbum.'); return; }
+      const { data, error } = await sb.from('albuns').insert({ obra_id: o.id, nome }).select().single();
+      if(error){ console.error(error); showToast('Erro ao criar álbum.'); return; }
+      albumId = data.id;
+      o.albuns.push({ id:data.id, nome:data.nome });
+    } else {
+      albumId = sel;
+    }
+  }
   const btn = document.getElementById('foto_btnAdd');
   const legenda = document.getElementById('foto_legenda').value.trim() || null;
   btn.disabled = true;
@@ -1814,9 +1893,9 @@ async function addFoto(){
     btn.textContent = files.length > 1 ? `Enviando ${i+1}/${files.length}…` : 'Enviando…';
     try{
       const path = await uploadArquivo(files[i], `fotos/${o.id}`);
-      const { data, error } = await sb.from('fotos').insert({ obra_id: o.id, storage_path: path, legenda }).select().single();
+      const { data, error } = await sb.from('fotos').insert({ obra_id: o.id, album_id: albumId, storage_path: path, legenda }).select().single();
       if(error) throw error;
-      o.fotos.unshift({ id:data.id, storagePath:data.storage_path, legenda:data.legenda });
+      o.fotos.unshift({ id:data.id, storagePath:data.storage_path, legenda:data.legenda, albumId:data.album_id, createdAt:data.created_at });
       ok++;
     }catch(err){
       console.error(err);
@@ -1825,6 +1904,7 @@ async function addFoto(){
   }
   showToast(fail ? `${ok} foto(s) adicionada(s), ${fail} falharam.` : (ok>1 ? `${ok} fotos adicionadas.` : 'Foto adicionada.'));
   btn.disabled = false; btn.textContent = 'Adicionar Foto';
+  state.currentAlbumId = albumId;
   renderTabFotos(document.getElementById('tabContent'), o);
 }
 function confirmRemoveFoto(id){
@@ -1845,6 +1925,29 @@ async function removeFoto(id){
   if(foto) await removeArquivo(foto.storagePath);
   o.fotos = (o.fotos||[]).filter(f=>f.id!==id);
   showToast('Foto removida.');
+  renderTabFotos(document.getElementById('tabContent'), o);
+}
+function confirmRemoveAlbum(id, nome){
+  const o = state.currentObra;
+  const count = fotosDoAlbum(o, id).length;
+  openModal(`
+    <h3>Excluir álbum "${escapeHtml(nome)}"?</h3>
+    <p style="font-size:13px; color:var(--ink-soft); line-height:1.5;">Remove o álbum e ${count} foto(s) dentro dele. Não é possível desfazer.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn danger" onclick="closeModal(); removeAlbum('${id}');">Excluir</button>
+    </div>
+  `);
+}
+async function removeAlbum(id){
+  const o = state.currentObra;
+  const fotosAlbum = fotosDoAlbum(o, id);
+  for(const f of fotosAlbum){ await removeArquivo(f.storagePath); }
+  const { error } = await sb.from('albuns').delete().eq('id', id);
+  if(error){ console.error(error); showToast('Erro ao remover álbum.'); return; }
+  o.albuns = (o.albuns||[]).filter(a=>a.id!==id);
+  o.fotos = (o.fotos||[]).filter(f=>f.albumId!==id);
+  showToast('Álbum removido.');
   renderTabFotos(document.getElementById('tabContent'), o);
 }
 
