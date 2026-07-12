@@ -407,6 +407,8 @@ let state = {
   obrasIndex: [],   // [{id, nome, status}]
   allSocios: [],    // registro global de sócios
   fundoAportes: [], // aportes do Fundo de Investimento (global, não ligado a obra)
+  todasDespesas: [], // despesas de todas as obras (para calcular saldo investido/caixa por sócio)
+  todasParticipacoes: [], // participações de todas as obras (para os pesos de meta de investimento)
   currentObra: null, // full obra object currently loaded
   currentView: 'dashboard', // 'dashboard' | 'obra' | 'fundo'
   currentTab: 'geral',
@@ -472,7 +474,7 @@ async function loadObra(id){
     sb.from('etapas').select('*').eq('obra_id', id).order('created_at', { ascending:true }),
     sb.from('documentos').select('*').eq('obra_id', id).order('created_at', { ascending:true }),
     sb.from('atualizacoes').select('*').eq('obra_id', id).order('data', { ascending:false }),
-    sb.from('participacoes').select('id, percentual, aporte, socio_id, socios(id, nome, email)').eq('obra_id', id),
+    sb.from('participacoes').select('id, percentual, aporte, meta_investimento_percentual, socio_id, socios(id, nome, email)').eq('obra_id', id),
     sb.from('fotos').select('*').eq('obra_id', id).order('created_at', { ascending:false })
   ]);
   if(obraRes.error || !obraRes.data) return null;
@@ -485,11 +487,11 @@ async function loadObra(id){
     margemLucroAlvo: o.margem_lucro_alvo ?? '', corretorNome: o.corretor_nome || '',
     comissaoCorretorPercentual: o.comissao_corretor_percentual ?? '',
     percentualEmpreiteira: o.percentual_empreiteira ?? '',
-    despesas: (despesasRes.data||[]).map(d=>({ id:d.id, categoria:d.categoria, descricao:d.descricao, valor:d.valor, data:d.data, socioId:d.socio_id, notaFiscalPath:d.nota_fiscal_path, notaFiscalNome:d.nota_fiscal_nome, pago:d.pago })),
+    despesas: (despesasRes.data||[]).map(d=>({ id:d.id, categoria:d.categoria, descricao:d.descricao, valor:d.valor, data:d.data, socioId:d.socio_id, fontePagamento:d.fonte_pagamento, notaFiscalPath:d.nota_fiscal_path, notaFiscalNome:d.nota_fiscal_nome, pago:d.pago })),
     etapas: (etapasRes.data||[]).map(e=>({ id:e.id, nome:e.nome, inicio:e.inicio, fim:e.fim, status:e.status, fotoPath:e.foto_path, fotoNome:e.foto_nome })),
     documentos: (docsRes.data||[]).map(d=>({ id:d.id, titulo:d.titulo, link:d.link, nota:d.nota, arquivoPath:d.arquivo_path, arquivoNome:d.arquivo_nome, arquivoTipo:d.arquivo_tipo })),
     atualizacoes: (atualizRes.data||[]).map(a=>({ id:a.id, texto:a.texto, data:a.data, etapaId:a.etapa_id })),
-    socios: (particRes.data||[]).map(p=>({ id:p.id, socioId:p.socio_id, nome: p.socios ? p.socios.nome : '(sócio removido)', percentual:p.percentual, aporte:p.aporte })),
+    socios: (particRes.data||[]).map(p=>({ id:p.id, socioId:p.socio_id, nome: p.socios ? p.socios.nome : '(sócio removido)', percentual:p.percentual, aporte:p.aporte, metaInvestimentoPercentual:p.meta_investimento_percentual })),
     fotos: (fotosRes.data||[]).map(f=>({ id:f.id, storagePath:f.storage_path, legenda:f.legenda }))
   };
 }
@@ -681,6 +683,14 @@ async function loadFundoAportes(){
   if(error){ console.error(error); showToast('Erro ao carregar o Fundo de Investimento.'); state.fundoAportes = []; return; }
   state.fundoAportes = data.map(a=>({ id:a.id, socioId:a.socio_id, nome: a.socios ? a.socios.nome : '(sócio removido)', valor:a.valor, data:a.data, descricao:a.descricao }));
 }
+async function loadFundoDadosGlobais(){
+  const [despesasRes, particRes] = await Promise.all([
+    sb.from('despesas').select('id, obra_id, socio_id, valor, fonte_pagamento, pago'),
+    sb.from('participacoes').select('obra_id, socio_id, meta_investimento_percentual')
+  ]);
+  if(despesasRes.error){ console.error(despesasRes.error); state.todasDespesas = []; } else { state.todasDespesas = despesasRes.data; }
+  if(particRes.error){ console.error(particRes.error); state.todasParticipacoes = []; } else { state.todasParticipacoes = particRes.data; }
+}
 async function goFundo(){
   state.currentView = 'fundo';
   state.currentObra = null;
@@ -689,26 +699,76 @@ async function goFundo(){
   renderSidebar();
   const main = document.getElementById('main');
   main.innerHTML = '<div class="loading-screen">Carregando Fundo de Investimento…</div>';
-  await loadFundoAportes();
+  await Promise.all([loadFundoAportes(), loadFundoDadosGlobais()]);
   renderFundo();
+}
+function pesoInvestimentoPorSocioObra(obraId){
+  const parts = (state.todasParticipacoes||[]).filter(p=>p.obra_id===obraId);
+  const pesos = {};
+  if(!parts.length) return pesos;
+  const todasDefinidas = parts.every(p=>p.meta_investimento_percentual!=null);
+  if(todasDefinidas){
+    const soma = parts.reduce((s,p)=>s+Number(p.meta_investimento_percentual||0),0) || 1;
+    parts.forEach(p=>{ pesos[p.socio_id] = Number(p.meta_investimento_percentual||0)/soma; });
+  } else {
+    parts.forEach(p=>{ pesos[p.socio_id] = 1/parts.length; });
+  }
+  return pesos;
+}
+function saldoInvestidoPorSocio(){
+  const aportes = state.fundoAportes || [];
+  const despesas = state.todasDespesas || [];
+  const socios = state.allSocios || [];
+  return socios.map(s=>{
+    const aportado = aportes.filter(a=>a.socioId===s.id).reduce((sum,a)=>sum+(Number(a.valor)||0),0);
+    const direto = despesas.filter(d=>d.socio_id===s.id && d.fonte_pagamento==='direto' && d.pago).reduce((sum,d)=>sum+(Number(d.valor)||0),0);
+    return { socioId:s.id, nome:s.nome, aportado, direto, investido: aportado+direto };
+  });
+}
+function saldoCaixaPorSocio(){
+  const aportes = state.fundoAportes || [];
+  const despesas = (state.todasDespesas||[]).filter(d=>d.pago);
+  const socios = state.allSocios || [];
+  const consumidoPorSocio = {};
+  despesas.filter(d=>d.fonte_pagamento==='fundo_rateado').forEach(d=>{
+    const pesos = pesoInvestimentoPorSocioObra(d.obra_id);
+    Object.keys(pesos).forEach(socioId=>{
+      consumidoPorSocio[socioId] = (consumidoPorSocio[socioId]||0) + Number(d.valor||0) * pesos[socioId];
+    });
+  });
+  despesas.filter(d=>d.fonte_pagamento==='fundo_individual' && d.socio_id).forEach(d=>{
+    consumidoPorSocio[d.socio_id] = (consumidoPorSocio[d.socio_id]||0) + Number(d.valor||0);
+  });
+  return socios.map(s=>{
+    const aportado = aportes.filter(a=>a.socioId===s.id).reduce((sum,a)=>sum+(Number(a.valor)||0),0);
+    const consumido = consumidoPorSocio[s.id] || 0;
+    return { socioId:s.id, nome:s.nome, consumido, caixa: aportado-consumido };
+  });
+}
+function resumoFundoPorSocio(){
+  const investido = saldoInvestidoPorSocio();
+  const caixa = saldoCaixaPorSocio();
+  return investido
+    .map(i=>{
+      const c = caixa.find(x=>x.socioId===i.socioId) || { consumido:0, caixa:i.aportado };
+      return { ...i, consumido:c.consumido, caixa:c.caixa };
+    })
+    .filter(r=>r.aportado>0 || r.investido>0 || r.consumido>0)
+    .sort((a,b)=>b.investido-a.investido);
 }
 function renderFundo(){
   const main = document.getElementById('main');
   const aportes = state.fundoAportes || [];
   const total = aportes.reduce((s,a)=> s + (Number(a.valor)||0), 0) || 0;
-  const porSocio = {};
-  aportes.forEach(a=>{
-    const chave = a.socioId || a.nome;
-    if(!porSocio[chave]) porSocio[chave] = { nome:a.nome, valor:0 };
-    porSocio[chave].valor += Number(a.valor)||0;
-  });
-  const resumo = Object.values(porSocio).sort((a,b)=>b.valor-a.valor);
+  const resumo = resumoFundoPorSocio();
+  const caixaTotal = resumo.reduce((s,r)=>s+r.caixa, 0);
   main.innerHTML = `
     <h1 class="section-title">Fundo de Investimento</h1>
-    <p class="section-sub">Caixa comum: cada sócio transfere um valor para a conta corrente central e o % de participação no fundo é calculado com base no total aportado por cada um. Não é ligado a nenhuma obra específica.</p>
+    <p class="section-sub">Caixa comum: cada sócio transfere um valor para a conta corrente central. O saldo rola entre obras — não é ligado a nenhuma obra específica.</p>
 
     <div class="cards-row">
-      <div class="card"><div class="label">Total no Fundo</div><div class="value num">${fmtMoney(total)}</div></div>
+      <div class="card"><div class="label">Total Aportado</div><div class="value num">${fmtMoney(total)}</div></div>
+      <div class="card"><div class="label">Caixa Disponível</div><div class="value num" style="color:${caixaTotal<0?'var(--red)':'var(--ink)'}">${fmtMoney(caixaTotal)}</div></div>
     </div>
 
     <div class="panel">
@@ -733,16 +793,36 @@ function renderFundo(){
     </div>
 
     <div class="panel">
-      <h3>Participação no Fundo</h3>
+      <h3>Calculadora de Aporte Sugerido</h3>
+      <p class="sub-txt" style="margin-bottom:10px;">Escolha a obra de referência (usa a Meta de Investimento dela para o rateio), informe o valor total a injetar no Fundo, e veja quanto cada sócio deveria transferir para o Saldo Investido de todos ficar equilibrado.</p>
+      <div class="field-grid">
+        <div class="field"><label>Obra de referência (meta)</label>
+          <select id="calc_obra">
+            <option value="">Selecione…</option>
+            ${state.obrasIndex.map(o=>`<option value="${o.id}">${escapeHtml(o.nome)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field"><label>Valor total a adicionar (R$)</label><input type="text" inputmode="decimal" id="calc_valor" oninput="moneyMaskInput(this)"></div>
+      </div>
+      <button class="btn primary" onclick="calcularAporteSugerido()">Calcular</button>
+      <div id="calc_resultado" style="margin-top:14px;"></div>
+    </div>
+
+    <div class="panel">
+      <h3>Saldo por Investidor</h3>
       ${resumo.length ? resumo.map(r=>`
         <div class="list-row">
-          <div class="main-txt">${escapeHtml(r.nome)}</div>
-          <div style="display:flex; align-items:center; gap:12px;">
-            <div class="sub-txt">${total>0 ? (r.valor/total*100).toFixed(1) : '0.0'}%</div>
-            <div class="amount">${fmtMoney(r.valor)}</div>
+          <div>
+            <div class="main-txt">${escapeHtml(r.nome)}</div>
+            <div class="sub-txt">Aportado: ${fmtMoney(r.aportado)} · Direto fora do fundo: ${fmtMoney(r.direto)}</div>
+            ${r.caixa<0 ? `<div class="sub-txt" style="color:var(--red)">⚠ Saldo em caixa negativo — sócios precisam se acertar</div>` : ''}
+          </div>
+          <div style="display:flex; align-items:center; gap:18px;">
+            <div><div class="sub-txt">Investido</div><div class="amount">${fmtMoney(r.investido)}</div></div>
+            <div><div class="sub-txt">Caixa no Fundo</div><div class="amount" style="color:${r.caixa<0?'var(--red)':'var(--ink)'}">${fmtMoney(r.caixa)}</div></div>
           </div>
         </div>
-      `).join('') : '<div class="empty-side">Nenhum aporte registrado ainda.</div>'}
+      `).join('') : '<div class="empty-side">Nenhum aporte ou despesa registrada ainda.</div>'}
     </div>
 
     <div class="panel">
@@ -785,6 +865,41 @@ async function addFundoAporte(){
   state.fundoAportes.unshift({ id:row.id, socioId:row.socio_id, nome: row.socios ? row.socios.nome : '(sócio removido)', valor:row.valor, data:row.data, descricao:row.descricao });
   showToast('Aporte registrado.');
   renderFundo();
+}
+function calcularAporteSugerido(){
+  const obraId = document.getElementById('calc_obra').value;
+  const valorNovo = money2num(document.getElementById('calc_valor').value);
+  if(!obraId){ showToast('Selecione uma obra de referência.'); return; }
+  if(!valorNovo || valorNovo<=0){ showToast('Informe um valor válido.'); return; }
+  const pesos = pesoInvestimentoPorSocioObra(obraId);
+  const socioIds = Object.keys(pesos);
+  if(!socioIds.length){ showToast('Essa obra não tem sócios cadastrados.'); return; }
+  const investido = saldoInvestidoPorSocio();
+  const totalAlvo = investido.reduce((s,i)=>s+i.investido,0) + valorNovo;
+  const resultado = socioIds.map(socioId=>{
+    const inv = investido.find(i=>i.socioId===socioId);
+    const nome = inv ? inv.nome : ((state.allSocios.find(s=>s.id===socioId)||{}).nome || '(sócio removido)');
+    const investidoAtual = inv ? inv.investido : 0;
+    const meta = totalAlvo * pesos[socioId];
+    return { socioId, nome, investidoAtual, meta, sugestao: meta - investidoAtual };
+  });
+  document.getElementById('calc_resultado').innerHTML = resultado.map(r=>`
+    <div class="list-row">
+      <div>
+        <div class="main-txt">${escapeHtml(r.nome)}</div>
+        <div class="sub-txt">Já investido: ${fmtMoney(r.investidoAtual)} · Meta após aporte: ${fmtMoney(r.meta)}</div>
+      </div>
+      <div style="display:flex; align-items:center; gap:12px;">
+        <div class="amount" style="color:${r.sugestao>=0?'var(--green)':'var(--red)'}">${fmtMoney(r.sugestao)}</div>
+        <button class="btn small ghost" onclick="usarValorSugerido('${r.socioId}', ${Math.max(0,r.sugestao)})">Usar este valor</button>
+      </div>
+    </div>
+  `).join('');
+}
+function usarValorSugerido(socioId, valor){
+  document.getElementById('fa_socio').value = socioId;
+  document.getElementById('fa_valor').value = moneyInputValue(Number(valor));
+  showToast('Valor sugerido preenchido no formulário de Novo Aporte.');
 }
 function confirmRemoveFundoAporte(id){
   openModal(`
@@ -955,6 +1070,11 @@ function socioNome(o, socioId){
   const s = (o.socios||[]).find(x=>x.socioId===socioId);
   return s ? s.nome : '(sócio removido)';
 }
+function fontePagamentoLabel(o, d){
+  if(d.fontePagamento === 'direto') return 'Direto por '+escapeHtml(socioNome(o,d.socioId))+' (fora do fundo)';
+  if(d.fontePagamento === 'fundo_individual') return 'Fundo — saldo de '+escapeHtml(socioNome(o,d.socioId));
+  return 'Fundo — rateado pela meta da obra';
+}
 function renderTabOrcamento(wrap, o){
   const despesas = o.despesas || [];
   const total = totalDespesas(o);
@@ -973,9 +1093,16 @@ function renderTabOrcamento(wrap, o){
         <div class="field"><label>Descrição</label><input type="text" id="d_descricao" placeholder="Ex: Tinta e pintura"></div>
         <div class="field"><label>Valor (R$)</label><input type="text" inputmode="decimal" id="d_valor" oninput="moneyMaskInput(this)"></div>
         <div class="field"><label>Data</label><input type="date" id="d_data"></div>
-        <div class="field"><label>Pago por</label>
+        <div class="field"><label>Fonte do Pagamento</label>
+          <select id="d_fonte" onchange="document.getElementById('d_socioWrap').style.display = this.value==='fundo_rateado' ? 'none' : 'flex';">
+            <option value="fundo_rateado">Fundo — rateado pela meta da obra</option>
+            <option value="fundo_individual">Fundo — saldo individual de um sócio</option>
+            <option value="direto">Direto — fora do fundo</option>
+          </select>
+        </div>
+        <div class="field" id="d_socioWrap" style="display:none;"><label>Sócio</label>
           <select id="d_socio">
-            <option value="">Dividir igualmente entre os sócios</option>
+            <option value="">Selecione…</option>
             ${socios.map(s=>`<option value="${s.socioId}">${escapeHtml(s.nome)}</option>`).join('')}
           </select>
         </div>
@@ -996,7 +1123,7 @@ function renderTabOrcamento(wrap, o){
         <div class="list-row">
           <div>
             <div class="main-txt">${escapeHtml(d.descricao||d.categoria)}</div>
-            <div class="sub-txt">${escapeHtml(d.categoria)} · ${fmtDate(d.data)} · ${d.socioId ? 'Pago por '+escapeHtml(socioNome(o,d.socioId)) : 'Dividido igualmente'}${d.notaFiscalPath ? ` · <a href="javascript:void(0)" onclick="openPhotoModal('${d.notaFiscalPath}', 'Nota Fiscal')">📎 Nota Fiscal</a>` : ''}</div>
+            <div class="sub-txt">${escapeHtml(d.categoria)} · ${fmtDate(d.data)} · ${fontePagamentoLabel(o,d)}${d.notaFiscalPath ? ` · <a href="javascript:void(0)" onclick="openPhotoModal('${d.notaFiscalPath}', 'Nota Fiscal')">📎 Nota Fiscal</a>` : ''}</div>
             <div style="margin-top:5px;"><span class="pill ${d.pago?'concluido':'pendente'}" style="cursor:pointer;" onclick="toggleDespesaPago('${d.id}')" title="Clique para alternar situação">${d.pago?'✓ Pago':'Pendente'}</span></div>
           </div>
           <div style="display:flex; align-items:center; gap:12px;">
@@ -1051,6 +1178,9 @@ async function addDespesa(){
   const descricao = document.getElementById('d_descricao').value.trim();
   const valor = money2num(document.getElementById('d_valor').value);
   if(!valor || valor<=0){ showToast('Informe um valor válido.'); return; }
+  const fontePagamento = document.getElementById('d_fonte').value;
+  const socioId = document.getElementById('d_socio').value || null;
+  if(fontePagamento !== 'fundo_rateado' && !socioId){ showToast('Selecione o sócio para essa fonte de pagamento.'); return; }
   const o = state.currentObra;
   const { data, error } = await sb.from('despesas').insert({
     obra_id: o.id,
@@ -1058,13 +1188,14 @@ async function addDespesa(){
     descricao,
     valor: Number(valor),
     data: document.getElementById('d_data').value || null,
-    socio_id: document.getElementById('d_socio').value || null,
+    socio_id: fontePagamento === 'fundo_rateado' ? null : socioId,
+    fonte_pagamento: fontePagamento,
     pago: document.getElementById('d_pago').value === 'true',
     nota_fiscal_path: pendingNotaFiscal ? pendingNotaFiscal.path : null,
     nota_fiscal_nome: pendingNotaFiscal ? pendingNotaFiscal.nome : null
   }).select().single();
   if(error){ console.error(error); showToast('Erro ao salvar despesa.'); return; }
-  o.despesas.push({ id:data.id, categoria:data.categoria, descricao:data.descricao, valor:data.valor, data:data.data, socioId:data.socio_id, notaFiscalPath:data.nota_fiscal_path, notaFiscalNome:data.nota_fiscal_nome, pago:data.pago });
+  o.despesas.push({ id:data.id, categoria:data.categoria, descricao:data.descricao, valor:data.valor, data:data.data, socioId:data.socio_id, fontePagamento:data.fonte_pagamento, notaFiscalPath:data.nota_fiscal_path, notaFiscalNome:data.nota_fiscal_nome, pago:data.pago });
   pendingNotaFiscal = null;
   showToast('Despesa adicionada.');
   renderTabOrcamento(document.getElementById('tabContent'), o);
@@ -1097,9 +1228,16 @@ function editDespesaModal(id){
       <div class="field"><label>Descrição</label><input type="text" id="ed_descricao" value="${escapeHtml(d.descricao||'')}"></div>
       <div class="field"><label>Valor (R$)</label><input type="text" inputmode="decimal" id="ed_valor" value="${moneyInputValue(d.valor)}" oninput="moneyMaskInput(this)"></div>
       <div class="field"><label>Data</label><input type="date" id="ed_data" value="${d.data||''}"></div>
-      <div class="field"><label>Pago por</label>
+      <div class="field"><label>Fonte do Pagamento</label>
+        <select id="ed_fonte" onchange="document.getElementById('ed_socioWrap').style.display = this.value==='fundo_rateado' ? 'none' : 'flex';">
+          <option value="fundo_rateado" ${d.fontePagamento==='fundo_rateado'?'selected':''}>Fundo — rateado pela meta da obra</option>
+          <option value="fundo_individual" ${d.fontePagamento==='fundo_individual'?'selected':''}>Fundo — saldo individual de um sócio</option>
+          <option value="direto" ${d.fontePagamento==='direto'?'selected':''}>Direto — fora do fundo</option>
+        </select>
+      </div>
+      <div class="field" id="ed_socioWrap" style="display:${d.fontePagamento==='fundo_rateado'?'none':'flex'};"><label>Sócio</label>
         <select id="ed_socio">
-          <option value="">Dividir igualmente entre os sócios</option>
+          <option value="">Selecione…</option>
           ${socios.map(s=>`<option value="${s.socioId}" ${d.socioId===s.socioId?'selected':''}>${escapeHtml(s.nome)}</option>`).join('')}
         </select>
       </div>
@@ -1139,12 +1277,16 @@ async function saveEditDespesa(id){
   const valor = money2num(document.getElementById('ed_valor').value);
   if(!valor || valor<=0){ showToast('Informe um valor válido.'); return; }
   const o = state.currentObra;
+  const fontePagamento = document.getElementById('ed_fonte').value;
+  const socioId = document.getElementById('ed_socio').value || null;
+  if(fontePagamento !== 'fundo_rateado' && !socioId){ showToast('Selecione o sócio para essa fonte de pagamento.'); return; }
   const payload = {
     categoria: document.getElementById('ed_categoria').value,
     descricao: document.getElementById('ed_descricao').value.trim(),
     valor: Number(valor),
     data: document.getElementById('ed_data').value || null,
-    socio_id: document.getElementById('ed_socio').value || null,
+    socio_id: fontePagamento === 'fundo_rateado' ? null : socioId,
+    fonte_pagamento: fontePagamento,
     pago: document.getElementById('ed_pago').value === 'true'
   };
   if(pendingNotaFiscalEdit){
@@ -1155,7 +1297,7 @@ async function saveEditDespesa(id){
   if(error){ console.error(error); showToast('Erro ao salvar despesa.'); return; }
   const d = (o.despesas||[]).find(x=>x.id===id);
   if(d){
-    Object.assign(d, { categoria:payload.categoria, descricao:payload.descricao, valor:payload.valor, data:payload.data, socioId:payload.socio_id, pago:payload.pago });
+    Object.assign(d, { categoria:payload.categoria, descricao:payload.descricao, valor:payload.valor, data:payload.data, socioId:payload.socio_id, fontePagamento:payload.fonte_pagamento, pago:payload.pago });
     if(pendingNotaFiscalEdit){ d.notaFiscalPath = payload.nota_fiscal_path; d.notaFiscalNome = payload.nota_fiscal_nome; }
   }
   pendingNotaFiscalEdit = null;
@@ -1409,15 +1551,29 @@ async function removeAtualizacao(id, etapaId){
 }
 
 /* ---- Tab: Sócios ---- */
+function pesoInvestimentoPorSocio(o){
+  const socios = o.socios || [];
+  const pesos = {};
+  if(!socios.length) return pesos;
+  const todasDefinidas = socios.every(s=>s.metaInvestimentoPercentual!=null && s.metaInvestimentoPercentual!=='');
+  if(todasDefinidas){
+    const soma = socios.reduce((s,x)=>s+Number(x.metaInvestimentoPercentual||0),0) || 1;
+    socios.forEach(s=>{ pesos[s.socioId] = Number(s.metaInvestimentoPercentual||0)/soma; });
+  } else {
+    socios.forEach(s=>{ pesos[s.socioId] = 1/socios.length; });
+  }
+  return pesos;
+}
 function despesasPorSocio(o){
   const socios = o.socios || [];
   const despesas = o.despesas || [];
   if(!socios.length) return [];
-  const semSocio = despesas.filter(d=>!d.socioId).reduce((s,d)=>s+(Number(d.valor)||0),0);
+  const pesos = pesoInvestimentoPorSocio(o);
+  const rateado = despesas.filter(d=>d.fontePagamento==='fundo_rateado').reduce((s,d)=>s+(Number(d.valor)||0),0);
   const totalGeral = totalDespesas(o) || 1;
   return socios.map(s=>{
-    const direto = despesas.filter(d=>d.socioId===s.socioId).reduce((sum,d)=>sum+(Number(d.valor)||0),0);
-    const valor = direto + (semSocio / socios.length);
+    const atribuido = despesas.filter(d=>d.socioId===s.socioId && (d.fontePagamento==='direto' || d.fontePagamento==='fundo_individual')).reduce((sum,d)=>sum+(Number(d.valor)||0),0);
+    const valor = atribuido + rateado*(pesos[s.socioId]||0);
     return { nome: s.nome, valor, pct: valor/totalGeral*100 };
   });
 }
@@ -1443,7 +1599,8 @@ function renderTabSocios(wrap, o){
         <div class="field" id="s_novoWrap" style="display:none;">
           <label>Nome do Novo Sócio</label><input type="text" id="s_novoNome">
         </div>
-        <div class="field"><label>Participação (%)</label><input type="number" step="0.1" id="s_percentual"></div>
+        <div class="field"><label>Participação (%) — divisão de lucro</label><input type="number" step="0.1" id="s_percentual"></div>
+        <div class="field"><label>Meta de Investimento (%) — opcional</label><input type="number" step="0.1" id="s_metaInvestimento" placeholder="igual entre sócios"></div>
         <div class="field"><label>Aporte de Capital (R$)</label><input type="text" inputmode="decimal" id="s_aporte" oninput="moneyMaskInput(this)"></div>
       </div>
       <button class="btn primary" onclick="addSocio()">Adicionar</button>
@@ -1453,8 +1610,13 @@ function renderTabSocios(wrap, o){
       ${socios.length ? socios.map(s=>`
         <div class="list-row">
           <div>
-            <div class="main-txt">${escapeHtml(s.nome)} <span class="sub-txt">— ${Number(s.percentual)||0}%</span></div>
+            <div class="main-txt">${escapeHtml(s.nome)} <span class="sub-txt">— ${Number(s.percentual)||0}% lucro</span></div>
             <div class="sub-txt">Aporte: ${fmtMoney(s.aporte)}</div>
+            <div class="sub-txt" style="display:flex; align-items:center; gap:6px; margin-top:4px;">
+              Meta de investimento:
+              <input type="number" step="0.1" style="width:70px; padding:2px 6px; font-size:12px;" id="meta_${s.id}" value="${s.metaInvestimentoPercentual ?? ''}" placeholder="igual">%
+              <button class="btn small ghost" onclick="updateMetaInvestimento('${s.id}')">Salvar</button>
+            </div>
           </div>
           <div style="display:flex; align-items:center; gap:12px;">
             <div class="amount" style="color:${lucro>=0?'var(--green)':'var(--red)'}">${fmtMoney(lucro * (Number(s.percentual)||0)/100)}</div>
@@ -1465,7 +1627,7 @@ function renderTabSocios(wrap, o){
     </div>
     <div class="panel">
       <h3>Divisão de Despesas por Sócio</h3>
-      <p class="sub-txt" style="margin-bottom:10px;">Despesas sem sócio definido no lançamento são rateadas igualmente entre os sócios da obra.</p>
+      <p class="sub-txt" style="margin-bottom:10px;">Despesas pagas pelo fundo rateado são divididas pela Meta de Investimento de cada sócio (ou igualmente, se a meta não for definida para todos).</p>
       ${divisaoDespesas.length ? divisaoDespesas.map(d=>`
         <div class="list-row">
           <div class="main-txt">${escapeHtml(d.nome)}</div>
@@ -1482,6 +1644,8 @@ async function addSocio(){
   const o = state.currentObra;
   const sel = document.getElementById('s_socio').value;
   const percentual = document.getElementById('s_percentual').value || 0;
+  const metaInvestimentoRaw = document.getElementById('s_metaInvestimento').value.trim();
+  const metaInvestimento = metaInvestimentoRaw === '' ? null : Number(metaInvestimentoRaw);
   const aporte = money2num(document.getElementById('s_aporte').value) || 0;
   if(!sel){ showToast('Selecione um sócio.'); return; }
   let socioId = sel, nome;
@@ -1497,11 +1661,23 @@ async function addSocio(){
     nome = (state.allSocios.find(s=>s.id===socioId)||{}).nome || '';
   }
   const { data: part, error: perr } = await sb.from('participacoes').insert({
-    obra_id: o.id, socio_id: socioId, percentual: Number(percentual), aporte: Number(aporte)
+    obra_id: o.id, socio_id: socioId, percentual: Number(percentual), aporte: Number(aporte), meta_investimento_percentual: metaInvestimento
   }).select().single();
   if(perr){ console.error(perr); showToast('Erro ao adicionar sócio (talvez já esteja nesta obra).'); return; }
-  o.socios.push({ id:part.id, socioId:part.socio_id, nome, percentual:part.percentual, aporte:part.aporte });
+  o.socios.push({ id:part.id, socioId:part.socio_id, nome, percentual:part.percentual, aporte:part.aporte, metaInvestimentoPercentual:part.meta_investimento_percentual });
   showToast('Sócio adicionado à obra.');
+  renderTabSocios(document.getElementById('tabContent'), o);
+}
+async function updateMetaInvestimento(participacaoId){
+  const input = document.getElementById('meta_'+participacaoId);
+  const valor = input.value.trim();
+  const metaValue = valor === '' ? null : Number(valor);
+  const { error } = await sb.from('participacoes').update({ meta_investimento_percentual: metaValue }).eq('id', participacaoId);
+  if(error){ console.error(error); showToast('Erro ao salvar meta de investimento.'); return; }
+  const o = state.currentObra;
+  const s = (o.socios||[]).find(x=>x.id===participacaoId);
+  if(s) s.metaInvestimentoPercentual = metaValue;
+  showToast('Meta de investimento atualizada.');
   renderTabSocios(document.getElementById('tabContent'), o);
 }
 async function removeSocio(id){
