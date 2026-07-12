@@ -488,7 +488,7 @@ async function loadObra(id){
     despesas: (despesasRes.data||[]).map(d=>({ id:d.id, categoria:d.categoria, descricao:d.descricao, valor:d.valor, data:d.data, socioId:d.socio_id, notaFiscalPath:d.nota_fiscal_path, notaFiscalNome:d.nota_fiscal_nome, pago:d.pago })),
     etapas: (etapasRes.data||[]).map(e=>({ id:e.id, nome:e.nome, inicio:e.inicio, fim:e.fim, status:e.status, fotoPath:e.foto_path, fotoNome:e.foto_nome })),
     documentos: (docsRes.data||[]).map(d=>({ id:d.id, titulo:d.titulo, link:d.link, nota:d.nota, arquivoPath:d.arquivo_path, arquivoNome:d.arquivo_nome, arquivoTipo:d.arquivo_tipo })),
-    atualizacoes: (atualizRes.data||[]).map(a=>({ id:a.id, texto:a.texto, data:a.data })),
+    atualizacoes: (atualizRes.data||[]).map(a=>({ id:a.id, texto:a.texto, data:a.data, etapaId:a.etapa_id })),
     socios: (particRes.data||[]).map(p=>({ id:p.id, socioId:p.socio_id, nome: p.socios ? p.socios.nome : '(sócio removido)', percentual:p.percentual, aporte:p.aporte })),
     fotos: (fotosRes.data||[]).map(f=>({ id:f.id, storagePath:f.storage_path, legenda:f.legenda }))
   };
@@ -1205,7 +1205,9 @@ function renderTabCronograma(wrap, o){
     <div class="panel">
       <h3>Cronograma</h3>
       ${etapas.length ? `<div class="timeline">
-        ${etapas.map(e=>`
+        ${etapas.map(e=>{
+          const notasCount = atualizacoes.filter(a=>a.etapaId===e.id).length;
+          return `
           <div class="tl-item ${e.status}">
             <div class="tl-header">
               <span class="tl-title">${escapeHtml(e.nome)}</span>
@@ -1220,34 +1222,12 @@ function renderTabCronograma(wrap, o){
               ${e.fotoPath
                 ? `<button class="btn small" onclick="openPhotoModal('${e.fotoPath}', '${escapeHtml(e.nome).replace(/'/g,"\\'")}')">📷 Ver foto</button>`
                 : `<button class="btn small ghost" onclick="attachEtapaFotoModal('${e.id}')">📷 Anexar foto</button>`}
+              <button class="btn small ghost" onclick="openEtapaNotasModal('${e.id}')">📝 Notas${notasCount?` (${notasCount})`:''}</button>
               <button class="icon-btn" onclick="confirmRemoveEtapa('${e.id}', '${escapeHtml(e.nome).replace(/'/g,"\\'")}')">✕</button>
             </div>
           </div>
-        `).join('')}
+        `;}).join('')}
       </div>` : '<div class="empty-side">Nenhuma etapa cadastrada ainda.</div>'}
-    </div>
-    <div class="panel">
-      <h3>Nova Nota / Atualização</h3>
-      <div class="field-grid">
-        <div class="field wide"><label>Texto</label><textarea id="a_texto" rows="2" placeholder="Ex: Reforma do telhado concluída"></textarea></div>
-        <div class="field"><label>Data</label><input type="date" id="a_data" value="${new Date().toISOString().slice(0,10)}"></div>
-      </div>
-      <button class="btn primary" onclick="addAtualizacao()">Adicionar</button>
-    </div>
-    <div class="panel">
-      <h3>Notas / Atualizações</h3>
-      ${atualizacoes.length ? atualizacoes.map(a=>`
-        <div class="list-row">
-          <div>
-            <div class="main-txt">${escapeHtml(a.texto)}</div>
-            <div class="sub-txt">${fmtDate(a.data)}</div>
-          </div>
-          <div class="row-actions">
-            <button class="icon-btn" onclick="editAtualizacaoModal('${a.id}')" title="Editar">✎</button>
-            <button class="icon-btn" onclick="removeAtualizacao('${a.id}')">✕</button>
-          </div>
-        </div>
-      `).join('') : '<div class="empty-side">Nenhuma atualização registrada ainda.</div>'}
     </div>
   `;
 }
@@ -1345,12 +1325,41 @@ async function removeEtapa(id){
   showToast('Etapa removida.');
   renderTabCronograma(document.getElementById('tabContent'), o);
 }
-function editAtualizacaoModal(id){
+function openEtapaNotasModal(etapaId){
+  const o = state.currentObra;
+  const et = (o.etapas||[]).find(e=>e.id===etapaId);
+  if(!et) return;
+  const notas = (o.atualizacoes||[]).filter(a=>a.etapaId===etapaId).sort((a,b)=>(b.data||'').localeCompare(a.data||''));
+  openModal(`
+    <h3>Notas — ${escapeHtml(et.nome)}</h3>
+    <div class="field-grid" style="margin-bottom:12px;">
+      <div class="field wide"><label>Nova nota</label><textarea id="an_texto" rows="2" placeholder="Ex: Reforma do telhado concluída"></textarea></div>
+      <div class="field"><label>Data</label><input type="date" id="an_data" value="${new Date().toISOString().slice(0,10)}"></div>
+    </div>
+    <button class="btn primary" style="margin-bottom:16px;" onclick="addAtualizacao('${etapaId}')">Adicionar</button>
+    ${notas.length ? notas.map(a=>`
+      <div class="list-row">
+        <div>
+          <div class="main-txt">${escapeHtml(a.texto)}</div>
+          <div class="sub-txt">${fmtDate(a.data)}</div>
+        </div>
+        <div class="row-actions">
+          <button class="icon-btn" onclick="editAtualizacaoModal('${a.id}', '${etapaId}')" title="Editar">✎</button>
+          <button class="icon-btn" onclick="removeAtualizacao('${a.id}', '${etapaId}')">✕</button>
+        </div>
+      </div>
+    `).join('') : '<div class="empty-side">Nenhuma nota para esta etapa ainda.</div>'}
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Fechar</button>
+    </div>
+  `);
+}
+function editAtualizacaoModal(id, etapaId){
   const o = state.currentObra;
   const a = (o.atualizacoes||[]).find(x=>x.id===id);
   if(!a) return;
   openModal(`
-    <h3>Editar Atualização</h3>
+    <h3>Editar Nota</h3>
     <div class="field" style="margin-bottom:12px;">
       <label>Texto</label>
       <textarea id="ea_texto" rows="3">${escapeHtml(a.texto)}</textarea>
@@ -1360,41 +1369,43 @@ function editAtualizacaoModal(id){
       <input type="date" id="ea_data" value="${a.data||''}">
     </div>
     <div class="modal-actions">
-      <button class="btn" onclick="closeModal()">Cancelar</button>
-      <button class="btn primary" onclick="saveEditAtualizacao('${id}')">Salvar</button>
+      <button class="btn" onclick="openEtapaNotasModal('${etapaId}')">Cancelar</button>
+      <button class="btn primary" onclick="saveEditAtualizacao('${id}', '${etapaId}')">Salvar</button>
     </div>
   `);
 }
-async function saveEditAtualizacao(id){
+async function saveEditAtualizacao(id, etapaId){
   const texto = document.getElementById('ea_texto').value.trim();
-  if(!texto){ showToast('Escreva o texto da atualização.'); return; }
+  if(!texto){ showToast('Escreva o texto da nota.'); return; }
   const o = state.currentObra;
   const data = document.getElementById('ea_data').value || null;
   const { error } = await sb.from('atualizacoes').update({ texto, data }).eq('id', id);
-  if(error){ console.error(error); showToast('Erro ao salvar atualização.'); return; }
+  if(error){ console.error(error); showToast('Erro ao salvar nota.'); return; }
   const a = (o.atualizacoes||[]).find(x=>x.id===id);
   if(a){ a.texto = texto; a.data = data; }
-  closeModal();
-  showToast('Atualização editada.');
+  showToast('Nota editada.');
   renderTabCronograma(document.getElementById('tabContent'), o);
+  openEtapaNotasModal(etapaId);
 }
-async function addAtualizacao(){
-  const texto = document.getElementById('a_texto').value.trim();
-  if(!texto){ showToast('Escreva o texto da atualização.'); return; }
+async function addAtualizacao(etapaId){
+  const texto = document.getElementById('an_texto').value.trim();
+  if(!texto){ showToast('Escreva o texto da nota.'); return; }
   const o = state.currentObra;
-  const data = document.getElementById('a_data').value || null;
-  const { data: row, error } = await sb.from('atualizacoes').insert({ obra_id: o.id, texto, data }).select().single();
-  if(error){ console.error(error); showToast('Erro ao salvar atualização.'); return; }
-  o.atualizacoes.unshift({ id:row.id, texto:row.texto, data:row.data });
-  showToast('Atualização adicionada.');
+  const data = document.getElementById('an_data').value || null;
+  const { data: row, error } = await sb.from('atualizacoes').insert({ obra_id: o.id, etapa_id: etapaId, texto, data }).select().single();
+  if(error){ console.error(error); showToast('Erro ao salvar nota.'); return; }
+  o.atualizacoes.unshift({ id:row.id, texto:row.texto, data:row.data, etapaId:row.etapa_id });
+  showToast('Nota adicionada.');
   renderTabCronograma(document.getElementById('tabContent'), o);
+  openEtapaNotasModal(etapaId);
 }
-async function removeAtualizacao(id){
+async function removeAtualizacao(id, etapaId){
   const o = state.currentObra;
   const { error } = await sb.from('atualizacoes').delete().eq('id', id);
   if(error){ console.error(error); showToast('Erro ao remover.'); return; }
   o.atualizacoes = (o.atualizacoes||[]).filter(a=>a.id!==id);
   renderTabCronograma(document.getElementById('tabContent'), o);
+  openEtapaNotasModal(etapaId);
 }
 
 /* ---- Tab: Sócios ---- */
