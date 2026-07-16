@@ -321,6 +321,15 @@ tbody tr:hover{ background: rgba(44,74,110,0.05); }
 .osc-metrics .label{ font-size:10.5px; text-transform:uppercase; letter-spacing:0.6px; color:var(--ink-soft); margin-bottom:4px; }
 .osc-metrics .num{ font-family:'JetBrains Mono', monospace; font-size:14px; }
 
+/* ---------- Autenticação ---------- */
+.unauthenticated .sidebar, .unauthenticated .new-obra-btn{ display:none; }
+.auth-wrap{ max-width:420px; margin:64px auto 0; }
+.auth-wrap h1{ font-family:'Archivo Black', sans-serif; font-size:24px; margin:0 0 6px; }
+.auth-wrap .sub{ color:var(--ink-soft); font-size:13px; margin-bottom:22px; }
+.auth-links{ display:flex; justify-content:space-between; margin-top:14px; font-size:12.5px; }
+.auth-links a{ cursor:pointer; }
+.user-menu-email{ color:var(--ink-soft); font-family:'JetBrains Mono', monospace; font-size:11px; }
+
 @media (max-width: 860px){
   .body{ flex-direction:column; }
   .sidebar{ width:100%; border-right:none; border-bottom: 1.5px solid var(--ink); max-height: 260px; }
@@ -329,19 +338,23 @@ tbody tr:hover{ background: rgba(44,74,110,0.05); }
 }
 </style>
 </head>
-<body>
+<body class="unauthenticated">
 <div class="shell">
   <div class="topbar">
     <div class="brand">
       <span class="mark">CANTEIRO</span>
       <span class="tag">Gestão de Obras &amp; Sócios</span>
     </div>
-    <div class="meta" id="topbarMeta">carregando…</div>
+    <div style="display:flex; align-items:center; gap:16px;">
+      <div class="meta" id="topbarMeta">carregando…</div>
+      <div id="userMenu"></div>
+    </div>
   </div>
   <div class="body">
     <div class="sidebar">
       <button class="dash-link active" id="dashLinkBtn" onclick="goDashboard()">▦ Visão Geral</button>
       <button class="dash-link" id="fundoLinkBtn" onclick="goFundo()">💰 Fundo de Investimento</button>
+      <div id="adminLinkWrap"></div>
       <button class="new-obra-btn" onclick="openObraModal()">+ Nova Obra</button>
       <h2>Obras</h2>
       <div id="obraList"><div class="empty-side">Carregando…</div></div>
@@ -365,6 +378,9 @@ const SUPABASE_URL = 'https://uniunzhagmqmiljpwsyl.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_jlaRAqO0hhUsPx5TKzUmZg_Dl6LwHPC';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const MEDIA_BUCKET = 'canteiro-media';
+const ADMIN_EMAIL = 'rafaeldanzideoliveira@gmail.com';
+const GITHUB_PAGES_URL = 'https://rafaeldanzi.github.io/canteiro/';
+function isAdmin(){ return !!(state.currentUser && (state.currentUser.email||'').toLowerCase() === ADMIN_EMAIL); }
 
 /* ---------------- Storage helpers (arquivos/fotos) ---------------- */
 async function uploadArquivo(file, pastaPrefixo){
@@ -411,8 +427,10 @@ let state = {
   todasParticipacoes: [], // participações de todas as obras (para os pesos de meta de investimento)
   currentAlbumId: null, // álbum de fotos aberto na aba Fotos (null = visão geral de álbuns)
   currentObra: null, // full obra object currently loaded
-  currentView: 'dashboard', // 'dashboard' | 'obra' | 'fundo'
+  currentView: 'dashboard', // 'dashboard' | 'obra' | 'fundo' | 'usuarios' | 'conta'
   currentTab: 'geral',
+  currentUser: null, // usuário logado (supabase auth)
+  usuariosPermitidos: [], // lista de e-mails autorizados (admin)
   loaded: false
 };
 
@@ -525,12 +543,367 @@ function lucroObra(obra){
 }
 
 /* ---------------- Init ---------------- */
-async function init(){
+async function startApp(){
   await Promise.all([loadObrasIndex(), loadAllSocios()]);
   state.loaded = true;
+  document.body.classList.remove('unauthenticated');
   document.getElementById('topbarMeta').textContent = state.obrasIndex.length + ' obra(s) · dados no Supabase (compartilhado entre sócios)';
+  renderUserMenu();
+  renderAdminLink();
   renderSidebar();
   goDashboard();
+}
+
+/* ---------------- Autenticação ---------------- */
+function isRecoveryLink(){
+  return /type=recovery/.test(window.location.hash) || /type=recovery/.test(window.location.search);
+}
+
+async function boot(){
+  if(isRecoveryLink()){ renderResetPasswordView(); return; }
+  const { data:{ session } } = await sb.auth.getSession();
+  if(session){ state.currentUser = session.user; await startApp(); }
+  else { renderLoginView(); }
+}
+
+sb.auth.onAuthStateChange((event, session)=>{
+  if(event === 'PASSWORD_RECOVERY'){ renderResetPasswordView(); return; }
+  if(event === 'SIGNED_IN'){
+    state.currentUser = session.user;
+    if(!state.loaded) startApp();
+  }
+  if(event === 'SIGNED_OUT'){
+    state.currentUser = null;
+    state.loaded = false;
+    document.body.classList.add('unauthenticated');
+    renderLoginView();
+  }
+});
+
+function renderLoginView(){
+  const main = document.getElementById('main');
+  main.innerHTML = `
+    <div class="auth-wrap">
+      <h1>Entrar</h1>
+      <p class="sub">Acesse o Canteiro com seu e-mail e senha.</p>
+      <div class="field" style="margin-bottom:12px;">
+        <label>E-mail</label>
+        <input type="email" id="login_email" placeholder="voce@email.com">
+      </div>
+      <div class="field" style="margin-bottom:12px;">
+        <label>Senha</label>
+        <input type="password" id="login_senha" placeholder="••••••••" onkeydown="if(event.key==='Enter') doLogin()">
+      </div>
+      <button class="btn primary" style="width:100%;" onclick="doLogin()">Entrar</button>
+      <div class="auth-links">
+        <a onclick="renderForgotPasswordView()">Esqueci minha senha</a>
+        <a onclick="renderSignupView()">Criar conta</a>
+      </div>
+    </div>
+  `;
+}
+
+async function doLogin(){
+  const email = document.getElementById('login_email').value.trim();
+  const senha = document.getElementById('login_senha').value;
+  if(!email || !senha){ showToast('Preencha e-mail e senha.'); return; }
+  const { error } = await sb.auth.signInWithPassword({ email, password: senha });
+  if(error){
+    if(/confirm/i.test(error.message)) showToast('Confirme seu e-mail antes de entrar.');
+    else showToast('E-mail ou senha inválidos.');
+  }
+}
+
+function renderSignupView(){
+  const main = document.getElementById('main');
+  main.innerHTML = `
+    <div class="auth-wrap">
+      <h1>Criar conta</h1>
+      <p class="sub">Use o mesmo e-mail cadastrado por um administrador.</p>
+      <div class="field" style="margin-bottom:12px;">
+        <label>E-mail</label>
+        <input type="email" id="signup_email" placeholder="voce@email.com">
+      </div>
+      <div id="signupStep2"></div>
+      <button class="btn primary" style="width:100%;" id="signupCheckBtn" onclick="checkEmailPermitido()">Verificar e-mail</button>
+      <div class="auth-links">
+        <a onclick="renderLoginView()">Já tenho conta</a>
+        <span></span>
+      </div>
+    </div>
+  `;
+}
+
+async function checkEmailPermitido(){
+  const email = document.getElementById('signup_email').value.trim();
+  if(!email){ showToast('Informe seu e-mail.'); return; }
+  const { data, error } = await sb.rpc('email_permitido', { p_email: email });
+  if(error){ console.error(error); showToast('Erro ao verificar e-mail.'); return; }
+  if(!data){ showToast('Este e-mail não foi autorizado por um administrador.'); return; }
+  document.getElementById('signupStep2').innerHTML = `
+    <div class="field" style="margin-bottom:12px;">
+      <label>Senha</label>
+      <input type="password" id="signup_senha" placeholder="Mínimo 6 caracteres">
+    </div>
+    <div class="field" style="margin-bottom:12px;">
+      <label>Confirmar senha</label>
+      <input type="password" id="signup_senha2" placeholder="Repita a senha">
+    </div>
+  `;
+  const btn = document.getElementById('signupCheckBtn');
+  btn.textContent = 'Criar conta';
+  btn.setAttribute('onclick', 'doSignup()');
+  showToast('E-mail autorizado. Defina sua senha.');
+}
+
+async function doSignup(){
+  const email = document.getElementById('signup_email').value.trim();
+  const senha = document.getElementById('signup_senha').value;
+  const senha2 = document.getElementById('signup_senha2').value;
+  if(senha.length < 6){ showToast('A senha precisa ter ao menos 6 caracteres.'); return; }
+  if(senha !== senha2){ showToast('As senhas não coincidem.'); return; }
+  const { error } = await sb.auth.signUp({ email, password: senha, options:{ emailRedirectTo: GITHUB_PAGES_URL } });
+  if(error){ console.error(error); showToast('Erro ao criar conta: ' + error.message); return; }
+  showToast('Verifique seu e-mail para confirmar a conta.');
+  renderLoginView();
+}
+
+function renderForgotPasswordView(){
+  const main = document.getElementById('main');
+  main.innerHTML = `
+    <div class="auth-wrap">
+      <h1>Esqueci minha senha</h1>
+      <p class="sub">Informe seu e-mail para receber um link de redefinição.</p>
+      <div class="field" style="margin-bottom:12px;">
+        <label>E-mail</label>
+        <input type="email" id="forgot_email" placeholder="voce@email.com">
+      </div>
+      <button class="btn primary" style="width:100%;" onclick="doForgotPassword()">Enviar link</button>
+      <div class="auth-links">
+        <a onclick="renderLoginView()">Voltar ao login</a>
+        <span></span>
+      </div>
+    </div>
+  `;
+}
+
+async function doForgotPassword(){
+  const email = document.getElementById('forgot_email').value.trim();
+  if(!email){ showToast('Informe seu e-mail.'); return; }
+  await sb.auth.resetPasswordForEmail(email, { redirectTo: GITHUB_PAGES_URL });
+  showToast('Se o e-mail existir, um link de redefinição foi enviado.');
+  renderLoginView();
+}
+
+function renderResetPasswordView(){
+  document.body.classList.add('unauthenticated');
+  const main = document.getElementById('main');
+  main.innerHTML = `
+    <div class="auth-wrap">
+      <h1>Nova senha</h1>
+      <p class="sub">Defina sua nova senha de acesso.</p>
+      <div class="field" style="margin-bottom:12px;">
+        <label>Nova senha</label>
+        <input type="password" id="reset_senha" placeholder="Mínimo 6 caracteres">
+      </div>
+      <div class="field" style="margin-bottom:12px;">
+        <label>Confirmar nova senha</label>
+        <input type="password" id="reset_senha2" placeholder="Repita a senha">
+      </div>
+      <button class="btn primary" style="width:100%;" onclick="doResetPassword()">Salvar nova senha</button>
+    </div>
+  `;
+}
+
+async function doResetPassword(){
+  const senha = document.getElementById('reset_senha').value;
+  const senha2 = document.getElementById('reset_senha2').value;
+  if(senha.length < 6){ showToast('A senha precisa ter ao menos 6 caracteres.'); return; }
+  if(senha !== senha2){ showToast('As senhas não coincidem.'); return; }
+  const { error } = await sb.auth.updateUser({ password: senha });
+  if(error){ console.error(error); showToast('Erro ao salvar senha: ' + error.message); return; }
+  showToast('Senha atualizada com sucesso.');
+  history.replaceState(null, '', window.location.pathname);
+  const { data:{ session } } = await sb.auth.getSession();
+  if(session){ state.currentUser = session.user; await startApp(); }
+  else { renderLoginView(); }
+}
+
+async function logout(){
+  await sb.auth.signOut();
+}
+
+function renderUserMenu(){
+  const wrap = document.getElementById('userMenu');
+  const email = state.currentUser ? state.currentUser.email : '';
+  wrap.innerHTML = `
+    <span class="user-menu-email">${escapeHtml(email)}</span>
+    <button class="btn small" onclick="renderMinhaConta()">Minha Conta</button>
+    <button class="btn small" onclick="logout()">Sair</button>
+  `;
+}
+
+function renderMinhaConta(){
+  state.currentView = 'conta';
+  state.currentObra = null;
+  document.getElementById('dashLinkBtn').classList.remove('active');
+  document.getElementById('fundoLinkBtn').classList.remove('active');
+  const usuariosBtn = document.getElementById('usuariosLinkBtn');
+  if(usuariosBtn) usuariosBtn.classList.remove('active');
+  renderSidebar();
+  const main = document.getElementById('main');
+  const email = state.currentUser ? state.currentUser.email : '';
+  main.innerHTML = `
+    <h1 class="section-title">Minha Conta</h1>
+    <p class="section-sub">${escapeHtml(email)}</p>
+    <div class="panel" style="max-width:420px;">
+      <h3>Trocar senha</h3>
+      <div class="field" style="margin-bottom:12px;">
+        <label>Nova senha</label>
+        <input type="password" id="conta_senha" placeholder="Mínimo 6 caracteres">
+      </div>
+      <div class="field" style="margin-bottom:12px;">
+        <label>Confirmar nova senha</label>
+        <input type="password" id="conta_senha2" placeholder="Repita a senha">
+      </div>
+      <button class="btn primary" onclick="doChangePassword()">Salvar nova senha</button>
+    </div>
+  `;
+}
+
+async function doChangePassword(){
+  const senha = document.getElementById('conta_senha').value;
+  const senha2 = document.getElementById('conta_senha2').value;
+  if(senha.length < 6){ showToast('A senha precisa ter ao menos 6 caracteres.'); return; }
+  if(senha !== senha2){ showToast('As senhas não coincidem.'); return; }
+  const { error } = await sb.auth.updateUser({ password: senha });
+  if(error){ console.error(error); showToast('Erro ao trocar senha: ' + error.message); return; }
+  document.getElementById('conta_senha').value = '';
+  document.getElementById('conta_senha2').value = '';
+  showToast('Senha atualizada com sucesso.');
+}
+
+function renderAdminLink(){
+  const wrap = document.getElementById('adminLinkWrap');
+  wrap.innerHTML = isAdmin()
+    ? `<button class="dash-link" id="usuariosLinkBtn" onclick="goUsuarios()">👤 Usuários</button>`
+    : '';
+}
+
+const TIPO_USUARIO_LABELS = { socio:'Sócio', empreiteira:'Empreiteira' };
+
+async function goUsuarios(){
+  if(!isAdmin()) return;
+  state.currentView = 'usuarios';
+  state.currentObra = null;
+  document.getElementById('dashLinkBtn').classList.remove('active');
+  document.getElementById('fundoLinkBtn').classList.remove('active');
+  document.getElementById('usuariosLinkBtn')?.classList.add('active');
+  renderSidebar();
+  const main = document.getElementById('main');
+  main.innerHTML = '<div class="loading-screen">Carregando usuários…</div>';
+  const { data, error } = await sb.from('usuarios_permitidos').select('*, socios(nome)').order('created_at', { ascending:true });
+  if(error){ console.error(error); showToast('Erro ao carregar usuários.'); main.innerHTML = '<div class="empty">Erro ao carregar dados.</div>'; return; }
+  state.usuariosPermitidos = data;
+  renderUsuarios();
+}
+
+function renderUsuarios(){
+  const main = document.getElementById('main');
+  const lista = state.usuariosPermitidos || [];
+  main.innerHTML = `
+    <div class="obra-head">
+      <div class="titles">
+        <h1>Usuários</h1>
+        <div class="section-sub">Quem pode criar conta e acessar o Canteiro.</div>
+      </div>
+      <div class="head-actions">
+        <button class="btn primary" onclick="openAddUsuarioPermitidoModal()">+ Adicionar e-mail</button>
+      </div>
+    </div>
+    ${lista.length===0 ? `<div class="empty"><div class="big">Nenhum usuário cadastrado</div>Adicione um e-mail para liberar o cadastro de alguém.</div>` : `
+    <div class="panel">
+      ${lista.map(u=>`
+        <div class="list-row">
+          <div>
+            <div class="main-txt">${escapeHtml(u.email)} <span class="pill ${u.user_id?'concluido':'pendente'}">${u.user_id?'Conta criada':'Convite pendente'}</span></div>
+            <div class="sub-txt">${TIPO_USUARIO_LABELS[u.tipo]||u.tipo}${u.socios&&u.socios.nome ? ' · vinculado a ' + escapeHtml(u.socios.nome) : ''}${u.nome? ' · ' + escapeHtml(u.nome):''}</div>
+          </div>
+          <div class="row-actions">
+            ${!u.user_id ? `<button class="icon-btn" title="Remover" onclick="confirmRemoveUsuarioPermitido('${u.id}', '${escapeHtml(u.email).replace(/'/g,"\\'")}')">✕</button>` : ''}
+          </div>
+        </div>
+      `).join('')}
+    </div>`}
+  `;
+}
+
+function openAddUsuarioPermitidoModal(){
+  const socios = state.allSocios || [];
+  openModal(`
+    <h3>Adicionar Usuário</h3>
+    <div class="field" style="margin-bottom:12px;">
+      <label>E-mail</label>
+      <input type="email" id="up_email" placeholder="pessoa@email.com">
+    </div>
+    <div class="field" style="margin-bottom:12px;">
+      <label>Nome</label>
+      <input type="text" id="up_nome" placeholder="Nome da pessoa">
+    </div>
+    <div class="field" style="margin-bottom:12px;">
+      <label>Tipo</label>
+      <select id="up_tipo" onchange="document.getElementById('up_socio_wrap').style.display = this.value==='socio' ? 'flex' : 'none';">
+        <option value="socio">Sócio</option>
+        <option value="empreiteira">Empreiteira</option>
+      </select>
+    </div>
+    <div class="field" id="up_socio_wrap" style="margin-bottom:12px;">
+      <label>Vincular a sócio existente (opcional)</label>
+      <select id="up_socio_id">
+        <option value="">— não vincular —</option>
+        ${socios.map(s=>`<option value="${s.id}">${escapeHtml(s.nome)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn primary" onclick="submitUsuarioPermitido()">Adicionar</button>
+    </div>
+  `);
+}
+
+async function submitUsuarioPermitido(){
+  const email = document.getElementById('up_email').value.trim();
+  const nome = document.getElementById('up_nome').value.trim();
+  const tipo = document.getElementById('up_tipo').value;
+  const socioId = document.getElementById('up_socio_id').value || null;
+  if(!email){ showToast('Informe o e-mail.'); return; }
+  const { error } = await sb.from('usuarios_permitidos').insert({ email, nome: nome||null, tipo, socio_id: socioId });
+  if(error){ console.error(error); showToast('Erro ao adicionar usuário (e-mail já cadastrado?).'); return; }
+  if(tipo==='socio' && socioId){
+    const socio = (state.allSocios||[]).find(s=>s.id===socioId);
+    if(socio && !socio.email){ await sb.from('socios').update({ email }).eq('id', socioId); await loadAllSocios(); }
+  }
+  closeModal();
+  showToast('Usuário adicionado.');
+  goUsuarios();
+}
+
+function confirmRemoveUsuarioPermitido(id, email){
+  openModal(`
+    <h3>Remover Usuário</h3>
+    <p>Remover o convite de <strong>${email}</strong>? A pessoa não poderá mais criar conta com esse e-mail.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn danger" onclick="closeModal(); removeUsuarioPermitido('${id}');">Remover</button>
+    </div>
+  `);
+}
+
+async function removeUsuarioPermitido(id){
+  const { error } = await sb.from('usuarios_permitidos').delete().eq('id', id);
+  if(error){ console.error(error); showToast('Erro ao remover usuário.'); return; }
+  showToast('Usuário removido.');
+  goUsuarios();
 }
 
 /* ---------------- Sidebar ---------------- */
@@ -560,6 +933,7 @@ async function goDashboard(){
   state.currentObra=null;
   document.getElementById('dashLinkBtn').classList.add('active');
   document.getElementById('fundoLinkBtn').classList.remove('active');
+  document.getElementById('usuariosLinkBtn')?.classList.remove('active');
   renderSidebar();
   const main = document.getElementById('main');
   main.innerHTML = '<div class="loading-screen">Calculando totais…</div>';
@@ -699,6 +1073,7 @@ async function goFundo(){
   state.currentObra = null;
   document.getElementById('dashLinkBtn').classList.remove('active');
   document.getElementById('fundoLinkBtn').classList.add('active');
+  document.getElementById('usuariosLinkBtn')?.classList.remove('active');
   renderSidebar();
   const main = document.getElementById('main');
   main.innerHTML = '<div class="loading-screen">Carregando Fundo de Investimento…</div>';
@@ -932,6 +1307,7 @@ async function openObra(id){
   state.currentAlbumId = null;
   document.getElementById('dashLinkBtn').classList.remove('active');
   document.getElementById('fundoLinkBtn').classList.remove('active');
+  document.getElementById('usuariosLinkBtn')?.classList.remove('active');
   renderSidebar();
   renderObra();
 }
@@ -2048,7 +2424,7 @@ function closeModal(){
   document.getElementById('modalRoot').innerHTML='';
 }
 
-init();
+boot();
 </script>
 </body>
 </html>
